@@ -107,12 +107,18 @@ var regex = map[string]string{
 	"google_oauth":             "ya29\\.[0-9A-Za-z\\-_]+",
 	"amazon_aws_access_key_id": "AKIA[0-9A-Z]{16}",
 	"amazon_mws_auth_token":    "amzn\\.mws\\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
-	//"amazonaws_url":                 "s3\\.amazonaws.com[/]+|[a-zA-Z0-9_-]*\\.s3\\.amazonaws.com",
-	"facebook_access_token":         "EAACEdEose0cBA[0-9A-Za-z]+",
-	"mailgun_api_key":               "key-[0-9a-zA-Z]{32}",
-	"twilio_api_key":                "K[0-9a-fA-F]{32}$",
-	"twilio_account_sid":            "C[a-zA-Z0-9_\\-]{32}$",
+	"amazonaws_url":            "s3\\.amazonaws\\.com[/]+|[a-zA-Z0-9_-]*\\.s3\\.amazonaws\\.com",
+	"Authorization_Bearer":    "(?i)(Authorization:\\sbearer\\s+[a-z0-9=:_\\-\\.+/]{5,100})",
+	"facebook_access_token":    "EAACEdEose0cBA[0-9A-Za-z]+",
+	"mailgun_api_key":          "key-[0-9a-zA-Z]{32}",
+	"twilio_api_key":           "SK[0-9a-fA-F]{32}$",
+	"twilio_account_sid":       "AC[a-zA-Z0-9_\\-]{32}$"
 	"twilio_app_sid":                "P[a-zA-Z0-9_\\-]{32}$",
+	'possible_Creds' : "(?i)(" \
+                    "password\s*[`=:\"]+\s*[^\s]+|" \
+                    "password is\s*[`=:\"]*\s*[^\s]+|" \
+                    "pwd\s*[`=:\"]*\s*[^\s]+|" \
+                    "passwd\s*[`=:\"]+\s*[^\s]+)",
 	"paypal_braintree_access_token": "access_token\\$production\\$[0-9a-z]{16}\\$[0-9a-f]{32}",
 	"square_oauth_secret":           "sq0csp-[ 0-9A-Za-z\\-_]{43}",
 	"square_access_token":           "sqOatp-[0-9A-Za-z\\-_]{22}",
