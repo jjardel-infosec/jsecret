@@ -114,7 +114,7 @@ var regex = map[string]string{
 	"twilio_api_key":           "SK[0-9a-fA-F]{32}$",
 	"twilio_account_sid":       "AC[a-zA-Z0-9_\\-]{32}$"
 	"twilio_app_sid":                "P[a-zA-Z0-9_\\-]{32}$",
-	'possible_Creds' : "(?i)(" \
+	"possible_Creds" : "(?i)(" \
                     "password\s*[`=:\"]+\s*[^\s]+|" \
                     "password is\s*[`=:\"]*\s*[^\s]+|" \
                     "pwd\s*[`=:\"]*\s*[^\s]+|" \
