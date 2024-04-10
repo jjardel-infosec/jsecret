@@ -114,11 +114,16 @@ var regex = map[string]string{
 	"twilio_api_key":           "SK[0-9a-fA-F]{32}$",
 	"twilio_account_sid":       "AC[a-zA-Z0-9_\\-]{32}$"
 	"twilio_app_sid":                "P[a-zA-Z0-9_\\-]{32}$",
-	"possible_Creds" : "(?i)(" \
-                    "password\s*[`=:\"]+\s*[^\s]+|" \
-                    "password is\s*[`=:\"]*\s*[^\s]+|" \
-                    "pwd\s*[`=:\"]*\s*[^\s]+|" \
-                    "passwd\s*[`=:\"]+\s*[^\s]+)",
+	"possible_Creds" : "(?i)(" +
+		"password\\s*[`=:\"]+\\s*[^\\s]+|" +
+		"password is\\s*[`=:\"]*\\s*[^\\s]+|" +
+		"pwd\\s*[`=:\"]*\\s*[^\\s]+|" +
+		"passwd\\s*[`=:\"]+\\s*[^\\s]+)",
+	"paypal_braintree_access_token": "access_token\\$production\\$[0-9a-z]{16}\\$[0-9a-f]{32}",
+	"square_oauth_secret":           "sq0csp-[ 0-9A-Za-z\\-_]{43}",
+	"square_access_token":           "sqOatp-[0-9A-Za-z\\-_]{22}",
+	"stripe_standard_api":           "sk_live_[0-9a-zA-Z]{24}",
+	"stripe_restricted_api":         "rk_live_[0-9a-zA-Z]{24}",
 	"paypal_braintree_access_token": "access_token\\$production\\$[0-9a-z]{16}\\$[0-9a-f]{32}",
 	"square_oauth_secret":           "sq0csp-[ 0-9A-Za-z\\-_]{43}",
 	"square_access_token":           "sqOatp-[0-9A-Za-z\\-_]{22}",
