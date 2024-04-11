@@ -8,7 +8,7 @@ simple and fast tool to detect sensitive data in the source code such as javascr
 
 # Usage
 
-`cat jsfiles.txt | jsceret`
+`cat jsfiles.txt | jsecret`
 
 `echo http://test.tld/main.js | jsecret`
 
