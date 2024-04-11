@@ -88,12 +88,12 @@ func requester(url string) string {
 }
 
 var regex = map[string]string{
-	"Yopmail": "@yopmail.com",
-	"AWS_SECRET_KEY": "(?i)aws([^;]{0,32}?)[\'"][0-9a-z/+=]{40}[\'"]",
-	"Authorization_Bearer": `(?i)(Authorization:\sbearer\s+[a-z0-9=:_\-.+/]{5,100})`,
-	"JJARDEL": `(?:"?[a-z0-9_\-]*(?:key|secret|password|dependencies|auth|aws_secret|api|token)[a-z0-9_\-]*"?\s*(?::|=)\s*\"?(?!null|true|false)([a-z0-9+_:\.\-\/]+)|"Authorization":"[a-z0-9+:_\-\/]+\s(.*?(?<!\\)(?=")))`,
-	"SEGREDOS WAR": `(('|")((?:ASIA|AKIA|AROA|AIDA)([A-Z0-9]{16}))('|").*?(\n^.*?){0,4}(('|")[a-zA-Z0-9+/]{40}('|"))+|('|")[a-zA-Z0-9+/]{40}('|").*?(\n^.*?){0,3}(('|")(?:ASIA|AKIA|AROA|AIDA)([A-Z0-9]{16})('|"))+)`,
-	"Firebase": `[-a-zA-Z0-9@:%._~#=]{1,256}.firebaseio.com`,
+    "Yopmail": "@yopmail.com",
+    "AWS_SECRET_KEY": "(?i)aws([^;]{0,32}?)[\'\"][0-9a-z/+=]{40}[\'\"]",
+    "Authorization_Bearer": `(?i)(Authorization:\sbearer\s+[a-z0-9=:_\-.+/]{5,100})`,
+    "JJARDEL": `(?:"?[a-z0-9_\-]*(?:key|secret|password|dependencies|auth|aws_secret|api|token)[a-z0-9_\-]*"?\\s*(?::|=)\\s*"?!(null|true|false)([a-z0-9+_:\.\-\/]+)|"Authorization":"[a-z0-9+:_\-\/]+\s(.*?(?<!\\)(?=")))`,
+    "SEGREDOS WAR": `(('|")((?:ASIA|AKIA|AROA|AIDA)([A-Z0-9]{16}))('|").*?(\n^.*?){0,4}(('|")[a-zA-Z0-9+/]{40}('|"))+|('|")[a-zA-Z0-9+/]{40}('|").*?(\n^.*?){0,3}(('|")(?:ASIA|AKIA|AROA|AIDA)([A-Z0-9]{16})('|"))+)`,
+    "Firebase": `[-a-zA-Z0-9@:%._~#=]{1,256}.firebaseio.com`,
 	"AWS Access Key ID Value": `(A3T[A-Z0-9]|AKIA|AGPA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}`,
 	"FCM Server Key": `AAAA[a-zA-Z0-9_-]{7}:[a-zA-Z0-9_-]{140}`,
 	"slack_token": `(xox[p|b|o|a]-[0-9]{12}-[0-9]{12}-[0-9]{12}-[a-z0-9]{32})`,
