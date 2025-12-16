@@ -4,6 +4,16 @@ A simple, fast, and concurrent tool to detect sensitive data (API keys, tokens, 
 
 ## Installation
 
+### Via Go (`@latest`)
+Install the latest release directly from GitHub:
+```bash
+go install github.com/jjardel-infosec/jsecret@latest
+```
+
+Make sure your Go bin directory is in `PATH`:
+- Linux/macOS: `$(go env GOPATH)/bin`
+- Windows: `%USERPROFILE%\\go\\bin`
+
 ### From Source
 1. Clone the repository:
    ```bash
@@ -62,6 +72,16 @@ jsecret -d .
 Save the results to a file while still seeing them in the console.
 ```bash
 jsecret -f urls.txt -o results.txt
+```
+
+Scan the current directory recursively and write findings to a file:
+```bash
+jsecret -d . -o secrets_found.txt
+```
+
+The output file is plain text (no colors) and uses the same format as stdout:
+```text
+[target] Signature Name : match
 ```
 
 **6. High Concurrency**
