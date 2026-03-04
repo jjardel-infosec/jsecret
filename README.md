@@ -1,4 +1,4 @@
-# jsecret v2.2 (Priorities Edition!)
+# jsecret v2.2
 
 `jsecret` is a simple, extremely fast, and concurrent tool designed to detect sensitive data (API keys, tokens, passwords, etc.) in source code files, specifically optimized for JavaScript.
 
