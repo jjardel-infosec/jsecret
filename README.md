@@ -1,18 +1,14 @@
-# jsecret v2.2 (Priorities Edition!)
+# jsecret v2.3
 
-`jsecret` is a simple, extremely fast, and concurrent tool designed to detect sensitive data (API keys, tokens, passwords, etc.) in source code files, specifically optimized for JavaScript.
+`jsecret` is a fast, concurrent scanner for JavaScript files that now combines classic secret detection with lightweight static analysis for risky code patterns.
 
-## What's New in v2.2?
+## What's New in v2.3?
 
-- **🚀 Performance O(1):** Rewritten with `sync.Map` for global hash deduplication. No more thread-locking bottle-necks.
-- **🛡️ SSL/TLS Bypass:** Automatically ignores expired or invalid certificates (`InsecureSkipVerify`). Perfect for old subdomains and internal assets.
-- **🔍 Full Scanning:** Unlike older versions that stopped at the first match, v2.2 finds **all** secrets within a single file.
-- **📊 Priority System:** Results are now categorized by severity:
-  - 🔴 **CRITICAL**: Cloud Keys (AWS, GCP), Database URIs, Private Keys, Hardcoded Passwords.
-  - 🟠 **HIGH**: SaaS Tokens (GitHub, Slack, Stripe, Twilio), CI/CD Secrets.
-  - 🟡 **MEDIUM**: Analytics Keys, OAuth Client IDs, Bot Tokens.
-  - 🔵 **LOW / NOISE**: Internal IPs, Dev/Staging URLs, generic Base64 blobs.
-- **📄 CSV Export:** Built-in safe CSV generation via `-csv` flag for easy spreadsheet analysis.
+- **Hybrid scanning:** Keeps the existing regex signatures for known tokens and adds heuristic analysis for JavaScript security flaws.
+- **JavaScript heuristics:** Flags potential DOM XSS, SQL injection, command injection, SSRF, open redirect, path traversal, insecure storage, weak crypto, wildcard `postMessage`, disabled TLS validation, and more.
+- **Line-aware evidence:** Heuristic findings include the line number and code snippet that triggered the alert.
+- **Full secret pass:** Signature matching still finds all matches in the same file and remains deduplicated by content hash.
+- **CSV export:** Built-in CSV reporting via `-csv`.
 
 ## Installation
 
@@ -41,7 +37,7 @@ go install github.com/jjardel-infosec/jsecret@latest
 - `-f`: Scan a list of URLs from a file.
 - `-d`: Recursive directory scan for `.js` files.
 - `-o`: Save results to a plain TXT file.
-- `-csv`: Export results to a formatted CSV file (Target, Priority, Type, Secret).
+- `-csv`: Export results to a formatted CSV file (Target, Priority, Type, Evidence).
 - `-t`: Set concurrent threads (default: 50).
 - `-s`: Silent mode (no banner).
 - `-h`: Show help.
@@ -68,13 +64,22 @@ jsecret -f js_urls.txt -csv reconnaissance_report.csv
 jsecret -u https://example.com/assets/config.js
 ```
 
+## Detection Coverage
+
+`jsecret` now uses two complementary passes:
+
+- **Signature pass:** Detects known secrets such as cloud keys, SaaS tokens, DB URIs, JWTs, webhooks, private keys, and hardcoded credentials.
+- **Heuristic pass:** Detects risky JavaScript patterns such as dynamic HTML sinks, `eval`, `new Function`, query concatenation, unsafe redirects, tainted file access, insecure web storage usage, weak hashing, predictable token generation, and disabled certificate validation.
+
+Heuristic findings are intentionally labeled as `Potential ...` when the result depends on code context rather than an exact signature.
+
 ## Output Format
 
 ### Terminal (Colored)
 `[target] [PRIORITY] Finding Name : match_content`
 
 ### CSV Export
-| Target | Priority | Finding Type | Matched Secret |
+| Target | Priority | Finding Type | Evidence |
 | :--- | :--- | :--- | :--- |
 | http://site.com/v.js | CRITICAL | AWS Access Key ID | AKIA... |
 

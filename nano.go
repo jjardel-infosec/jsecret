@@ -31,32 +31,8 @@ func matcher(target string, results chan<- Result) {
 			return // Já escaneamos esse mesmo conteúdo/arquivo anteriormente!
 		}
 
-		for _, sig := range Signatures {
-			// FindAllString: Garante que pegamos TODOS os secrets dentro de um mesmo arquivo
-			matches := sig.Regex.FindAllString(content, -1)
-
-			if len(matches) > 0 {
-				uniqueMatches := make(map[string]struct{})
-
-				for _, match := range matches {
-					cleanMatch := strings.TrimSpace(match)
-					if _, exists := uniqueMatches[cleanMatch]; !exists && cleanMatch != "" {
-						uniqueMatches[cleanMatch] = struct{}{}
-
-						// Truncate match se ele for muito longo
-						if len(cleanMatch) > 100 {
-							cleanMatch = cleanMatch[:100] + "..."
-						}
-
-						results <- Result{
-							Target:   target,
-							Name:     sig.Name,
-							Match:    cleanMatch,
-							Priority: sig.Priority,
-						}
-					}
-				}
-			}
+		for _, result := range scanContent(target, content) {
+			results <- result
 		}
 	}
 }
@@ -103,7 +79,7 @@ func requester(url string) string {
 		return ""
 	}
 
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; JSecret/2.2; +https://github.com/jjardel-infosec/jsecret)")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; JSecret/2.3; +https://github.com/jjardel-infosec/jsecret)")
 
 	resp, err := client.Do(req)
 	if err != nil {

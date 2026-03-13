@@ -112,7 +112,7 @@ func main() {
 				defer csvWriter.Flush()
 
 				// Write Header
-				csvWriter.Write([]string{"Target", "Priority", "Finding Type", "Matched Secret"})
+				csvWriter.Write([]string{"Target", "Priority", "Finding Type", "Evidence"})
 			}
 		}
 
@@ -233,6 +233,6 @@ func printBanner() {
       | \__ \  __/ (__| | |  __/| |_ 
       | |___/\___|\___|_|  \___| \__|
      _/ |                            
-    |__/   v2.2 - @jjardel-infosec (Priorities Edition!)
+    |__/   v2.3 - @jjardel-infosec (Hybrid JS Security Scan)
 	`)
 }
