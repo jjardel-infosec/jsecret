@@ -1,6 +1,6 @@
-# jsecret v2.3
+# jsecret v2.2 (Priorities Edition!)
 
-`jsecret` is a fast, concurrent scanner for JavaScript files that now combines classic secret detection with lightweight static analysis for risky code patterns.
+`jsecret` is a simple, extremely fast, and concurrent tool designed to detect sensitive data (API keys, tokens, passwords, etc.) in source code files, specifically optimized for JavaScript.
 
 ## What's New in v2.3?
 
