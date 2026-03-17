@@ -37,7 +37,7 @@ func init() {
 		{"Cloud SQL URI (GCP)", `googleapis\.com\/sql\/v1beta4\/projects\/`, "CRITICAL"},
 		{"Private Key Block", `-----BEGIN (RSA|DSA|EC|OPENSSH)? PRIVATE KEY-----`, "CRITICAL"},
 		{"PGP Private Key Block", `-----BEGIN PGP PRIVATE KEY BLOCK-----`, "CRITICAL"},
-		{"Basic Auth String", `(?i)(?:(?:username|user|email)\s*[:=]\s*['"][^'"\s@]{3,100}['"][^\n]{0,120}(?:password|passwd|pwd)\s*[:=]\s*['"][^'"\s<>]{8,100}['"]|(?:password|passwd|pwd)\s*[:=]\s*['"][^'"\s<>]{8,100}['"][^\n]{0,120}(?:username|user|email)\s*[:=]\s*['"][^'"\s@]{3,100}['"])`, "CRITICAL"},
+		{"Basic Auth String", `(?is)(?:['"](?:username|user|email)['"]\s*:\s*['"][^'"\s@]{3,100}['"][\s\S]{0,120}['"](?:password|passwd|pwd)['"]\s*:\s*['"][^'"\s<>]{8,100}['"]|['"](?:password|passwd|pwd)['"]\s*:\s*['"][^'"\s<>]{8,100}['"][\s\S]{0,120}['"](?:username|user|email)['"]\s*:\s*['"][^'"\s@]{3,100}['"])`, "CRITICAL"},
 		{"Password Assignment", `(?i)\b(?:password|passwd|pwd)\b\s*[:=]\s*['"][^'"\s<>]{8,100}['"]`, "CRITICAL"},
 
 		// 🔑 High: Plataformas, Git de Repos, Comunicação e SaaS
@@ -60,7 +60,7 @@ func init() {
 		{"Docker Hub Password", `(?i)docker(.{0,20})?password['"\s:=]+[^\s'"]{8,}`, "HIGH"},
 		{"AWS IAM Role ARN", `arn:aws:iam::[0-9]{12}:role\/[A-Za-z0-9_+=,.@\-_/]+`, "HIGH"},
 		{"Kubernetes Secret Name", `(?i)secretName:\s*['"]?[a-z0-9\-]+['"]?`, "HIGH"},
-		{"Helm Secret Value", `(?is)apiVersion\s*:\s*v\d+[^\n]*[\s\S]{0,250}kind\s*:\s*Secret[\s\S]{0,500}secret\s*:\s*['"][^'"]+['"]`, "HIGH"},
+		{"Helm Secret Value", `(?is)apiVersion\s*:\s*v\d+[^\n]*[\s\S]{0,250}kind\s*:\s*Secret[\s\S]{0,500}\b(?:data|stringData)\b[\s\S]{0,500}\bsecret\s*:\s*['"][^'"]+['"]`, "HIGH"},
 		{"GitHub Actions Secret Reference", `secrets\.[A-Z0-9_]+`, "HIGH"},
 		{"GitHub Actions Encrypted Value", `encrypted_value:\s*['"][a-zA-Z0-9+/=]{10,}['"]`, "HIGH"},
 		{"K8s Service Account Token", `eyJhbGciOiJSUzI1NiIsImtpZCI6`, "HIGH"},
@@ -115,8 +115,8 @@ func init() {
 
 		// 🔐 Medium: Tokens de Baixo Risco, Analytics e Oauth Incompleto
 		{"Firebase API Key", `firebaseConfig\s*=\s*{[^}]*apiKey\s*:\s*['"][^'"]+['"]`, "MEDIUM"},
-		{"OAuth Client Secret", `(?i)\bclient_secret\b\s*[:=]\s*['"](?=[A-Za-z0-9._~\-]{16,100}['"])(?=[^'"]*[A-Za-z])(?=[^'"]*\d)[A-Za-z0-9._~\-]{16,100}['"]`, "MEDIUM"},
-		{"OAuth Client ID", `(?i)\bclient_id\b\s*[:=]\s*['"](?=[A-Za-z0-9._~\-]{12,100}['"])(?=[^'"]*[A-Za-z])(?=[^'"]*\d)[A-Za-z0-9._~\-]{12,100}['"]`, "MEDIUM"},
+		{"OAuth Client Secret", `(?i)\bclient_secret\b\s*[:=]\s*['"](?=[A-Za-z0-9._~\-]{24,100}['"])(?=[^'"]*[A-Za-z])(?=[^'"]*\d)[A-Za-z0-9._~\-]{24,100}['"]`, "MEDIUM"},
+		{"OAuth Client ID", `(?i)\bclient_id\b\s*[:=]\s*['"](?=[A-Za-z0-9._~\-]{16,100}['"])(?=[^'"]*[A-Za-z])(?=[^'"]*\d)[A-Za-z0-9._~\-]{16,100}['"]`, "MEDIUM"},
 		{"Azure Client Secret", `(?i)azure(.{0,20})?client.secret(.{0,20})?['\"][a-zA-Z0-9._%+-]{32,}['\"]`, "MEDIUM"},
 		{"Microsoft Teams Webhook", `https:\/\/[a-z]+\.webhook\.office\.com\/webhookb2\/[a-zA-Z0-9@\-]+\/.*`, "MEDIUM"},
 		{"API Key in Variable", `(?i)(api[_-]?key)['"\s:=]+(?![a-zA-Z]\.[a-zA-Z])[a-zA-Z0-9\-_]{8,100}`, "MEDIUM"},

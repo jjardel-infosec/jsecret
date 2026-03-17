@@ -150,6 +150,27 @@ func TestScanContentSkipsBase64AlphabetNoise(t *testing.T) {
 	}
 }
 
+func TestScanContentSkipsNoisySignaturesForLinuxVendorPath(t *testing.T) {
+	content := `
+"username":"john",
+"password":"12345678",
+"client_secret":"40bd001563085fc35165329ea1ff5c5ecbdbbeef",
+"client_id":"40bd001563085fc35165329ea1ff5c5ecbdbbeef"
+`
+
+	results := scanContent("/home/kali/tools/recon-web/data/runs/x/06-JS_DOWNLOAD/site/main.4c3332c6.chunk.js", content)
+
+	if findResult(results, "Basic Auth String") != nil {
+		t.Fatalf("unexpected basic auth finding for vendor linux path: %#v", results)
+	}
+	if findResult(results, "OAuth Client Secret") != nil {
+		t.Fatalf("unexpected oauth secret finding for vendor linux path: %#v", results)
+	}
+	if findResult(results, "OAuth Client ID") != nil {
+		t.Fatalf("unexpected oauth id finding for vendor linux path: %#v", results)
+	}
+}
+
 func findResult(results []Result, name string) *Result {
 	for i := range results {
 		if results[i].Name == name {

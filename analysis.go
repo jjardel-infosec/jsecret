@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -116,7 +117,7 @@ func collectSignatureFindings(target, content string, add func(name, priority, m
 	vendorTarget := isLikelyVendorTarget(target)
 
 	for _, sig := range Signatures {
-		if vendorTarget && (sig.Name == "Base64 High Entropy String" || sig.Name == "Localhost Reference" || sig.Name == "Private IP (Internal)" || sig.Name == "Dev/Stage URL") {
+		if vendorTarget && (sig.Name == "Base64 High Entropy String" || sig.Name == "Localhost Reference" || sig.Name == "Private IP (Internal)" || sig.Name == "Dev/Stage URL" || sig.Name == "Basic Auth String" || sig.Name == "OAuth Client Secret" || sig.Name == "OAuth Client ID" || sig.Name == "Helm Secret Value") {
 			continue
 		}
 
@@ -670,6 +671,7 @@ func firstNonEmpty(values ...string) string {
 func isLikelyVendorTarget(target string) bool {
 	lower := strings.ToLower(target)
 	base := strings.ToLower(filepath.Base(target))
+	unixBase := strings.ToLower(path.Base(strings.ReplaceAll(target, "\\", "/")))
 
 	vendorMarkers := []string{
 		".min.js",
@@ -703,16 +705,16 @@ func isLikelyVendorTarget(target string) bool {
 	}
 
 	for _, marker := range vendorMarkers {
-		if strings.Contains(lower, marker) {
+		if strings.Contains(lower, marker) || strings.Contains(base, marker) || strings.Contains(unixBase, marker) {
 			return true
 		}
 	}
 
-	if regexp.MustCompile(`^[a-f0-9]{8,}\.js$`).MatchString(base) {
+	if regexp.MustCompile(`^[a-f0-9]{8,}\.js$`).MatchString(base) || regexp.MustCompile(`^[a-f0-9]{8,}\.js$`).MatchString(unixBase) {
 		return true
 	}
 
-	if regexp.MustCompile(`^[a-f0-9-]{20,}\.js$`).MatchString(base) {
+	if regexp.MustCompile(`^[a-f0-9-]{20,}\.js$`).MatchString(base) || regexp.MustCompile(`^[a-f0-9-]{20,}\.js$`).MatchString(unixBase) {
 		return true
 	}
 
@@ -760,7 +762,15 @@ func isLikelyBase64Noise(value string) bool {
 		return true
 	}
 
+	if strings.HasPrefix(trimmed, "/") {
+		return true
+	}
+
 	if strings.Contains(trimmed, "/") && !strings.ContainsAny(trimmed, "+=") {
+		return true
+	}
+
+	if !strings.ContainsAny(trimmed, "+/=") {
 		return true
 	}
 
