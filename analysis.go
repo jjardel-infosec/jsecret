@@ -13,6 +13,34 @@ type resultCollector struct {
 	results []Result
 }
 
+// knownSafeStrings contains hashes/strings that commonly appear in code but are not secrets
+var knownSafeStrings = map[string]bool{
+	// SHA1 empty string
+	"da39a3ee5e6b4b0d3255bfef95601890afd80709": true,
+	// SHA256 empty string
+	"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855": true,
+	// MD5 empty string
+	"d41d8cd98f00b204e9800998ecf8427e": true,
+	// Sequential alphabets (common in charset definitions)
+	"0123456789abcdefghijklmnopqrstuv":     true,
+	"abcdefghijklmnopqrstuvwxyz012345":     true,
+	"0123456789abcdef":                     true,
+	"0123456789abcdefghijklmnopqrstuvwxyz": true,
+	"abcdefghijklmnopqrstuvwxyz":           true,
+	// Common test/example values
+	"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx":         true,
+	"00000000000000000000000000000000":         true,
+	"11111111111111111111111111111111":         true,
+	"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": true,
+}
+
+// lowEntropyPatterns are signature names that should require entropy validation
+var lowEntropyPatterns = map[string]bool{
+	"GitHub OAuth App Secret":    true,
+	"Loggly Token":               true,
+	"Base64 High Entropy String": true,
+}
+
 var (
 	suspiciousAssignmentPattern = regexp.MustCompile("(?i)\\b(?:const|let|var)?\\s*([A-Za-z_$][\\w$]*(?:secret|token|password|passwd|api[_-]?key|apikey|auth|jwt|clientsecret|accesskey|accesstoken|privatekey)[A-Za-z0-9_$]*)\\b\\s*[:=]\\s*(?:'([^'\\n]{8,})'|\"([^\"\\n]{8,})\"|`([^`\\n]{8,})`)")
 	xssSinkPattern              = regexp.MustCompile(`(?i)(?:\.innerHTML\s*=|\.outerHTML\s*=|insertAdjacentHTML\s*\(|document\.write\s*\(|\.srcdoc\s*=|dangerouslySetInnerHTML\s*[:=])`)
@@ -36,6 +64,14 @@ var (
 	sanitizerPattern            = regexp.MustCompile(`(?i)(?:DOMPurify\.sanitize|sanitizeHtml|xssFilters|escapeHtml|he\.encode)`)
 	corsWildcardPattern         = regexp.MustCompile(`(?is)cors\s*\(\s*{[^}]*origin\s*:\s*['"]\*['"][^}]*credentials\s*:\s*true`)
 	manualCorsPattern           = regexp.MustCompile(`(?is)Access-Control-Allow-Origin['"]?\s*[:=,]\s*['"]\*['"][\s\S]{0,200}Access-Control-Allow-Credentials['"]?\s*[:=,]\s*true`)
+	// Security heuristics
+	prototypePollutionPattern  = regexp.MustCompile(`(?i)(?:__proto__|constructor\s*\.\s*prototype|\[['"](?:__proto__|constructor|prototype)['"]\])`)
+	templateInjectionPattern   = regexp.MustCompile(`(?i)(?:\{\{\s*[^}]*\s*\}\}|<%[^%]*%>|\$\{[^}]*\}.*render|nunjucks\.render|ejs\.render|pug\.render|handlebars\.compile|Mustache\.render)`)
+	insecureDeserializePattern = regexp.MustCompile(`(?i)(?:unserialize\s*\(|pickle\.loads?\s*\(|yaml\.(?:load|unsafe_load)\s*\(|JSON\.parse\s*\([^)]*(?:localStorage|sessionStorage|req\.|request\.)|deserialize\s*\([^)]*(?:body|params|query))`)
+	objectMergePattern         = regexp.MustCompile(`(?i)(?:Object\.assign\s*\([^,]*,\s*(?:req\.|request\.|params|body|query)|_\.merge\s*\(|lodash\.merge\s*\(|\$\.extend\s*\(true|deepmerge\s*\()`)
+	massAssignmentPattern      = regexp.MustCompile(`(?i)(?:\.update\s*\(\s*(?:req\.body|params)|\.create\s*\(\s*(?:req\.body|params)|\bspread\s*\(\s*(?:req\.|props))`)
+	jwtWeakAlgPattern          = regexp.MustCompile(`(?i)(?:algorithm\s*[:=]\s*['"](?:none|HS256)['"]|alg\s*[:=]\s*['"]none['"])`)
+	hardcodedJWTSecretPattern  = regexp.MustCompile(`(?i)(?:jwt\.sign|jwt\.verify)\s*\([^)]*['"](secret|password|key123|test|sample|example|changeme)['"]\s*\)`)
 )
 
 func scanContent(target, content string) []Result {
@@ -74,6 +110,19 @@ func collectSignatureFindings(content string, add func(name, priority, match str
 	for _, sig := range Signatures {
 		matches := sig.Regex.FindAllString(content, -1)
 		for _, match := range matches {
+			// Skip known safe strings (common hashes, test values)
+			normalizedMatch := strings.ToLower(strings.TrimSpace(match))
+			if knownSafeStrings[normalizedMatch] {
+				continue
+			}
+
+			// For patterns prone to false positives, require minimum entropy
+			if lowEntropyPatterns[sig.Name] {
+				if shannonEntropy(match) < 3.5 {
+					continue
+				}
+			}
+
 			add(sig.Name, sig.Priority, match)
 		}
 	}
@@ -141,6 +190,34 @@ func collectHeuristicFindings(content string, add func(name, priority, match str
 
 		if fileAccessPattern.MatchString(text) && taintSourcePattern.MatchString(text) {
 			add("Potential Path Traversal", "MEDIUM", formatLineEvidence(line.Number, text))
+		}
+
+		if prototypePollutionPattern.MatchString(text) {
+			add("Potential Prototype Pollution", "HIGH", formatLineEvidence(line.Number, text))
+		}
+
+		if objectMergePattern.MatchString(text) {
+			add("Object Merge With User Input", "MEDIUM", formatLineEvidence(line.Number, text))
+		}
+
+		if templateInjectionPattern.MatchString(text) && taintSourcePattern.MatchString(text) {
+			add("Potential Template Injection", "HIGH", formatLineEvidence(line.Number, text))
+		}
+
+		if insecureDeserializePattern.MatchString(text) {
+			add("Potential Insecure Deserialization", "HIGH", formatLineEvidence(line.Number, text))
+		}
+
+		if massAssignmentPattern.MatchString(text) {
+			add("Potential Mass Assignment", "MEDIUM", formatLineEvidence(line.Number, text))
+		}
+
+		if jwtWeakAlgPattern.MatchString(text) {
+			add("JWT Weak Algorithm", "HIGH", formatLineEvidence(line.Number, text))
+		}
+
+		if hardcodedJWTSecretPattern.MatchString(text) {
+			add("Hardcoded JWT Secret", "CRITICAL", formatLineEvidence(line.Number, text))
 		}
 
 		if sqlExecutionPattern.MatchString(text) && sqlKeywordPattern.MatchString(text) && dynamicDataPattern.MatchString(text) {
