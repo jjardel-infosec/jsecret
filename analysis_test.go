@@ -121,6 +121,19 @@ const y = value && value.constructor.prototype;
 	}
 }
 
+func TestScanContentSkipsHeuristicsForXHTMLVendorFiles(t *testing.T) {
+	content := `
+window.postMessage(payload, "*");
+element.innerHTML = location.hash;
+eval(userInput);
+`
+
+	results := scanContent("jquery.fitvids.js.xhtml.js", content)
+	if len(results) != 0 {
+		t.Fatalf("expected no heuristic findings for xhtml vendor file, got %#v", results)
+	}
+}
+
 func findResult(results []Result, name string) *Result {
 	for i := range results {
 		if results[i].Name == name {

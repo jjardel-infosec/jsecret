@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -136,9 +137,12 @@ func collectSignatureFindings(content string, add func(name, priority, match str
 }
 
 func collectHeuristicFindings(target, content string, add func(name, priority, match string)) {
+	if isLikelyVendorTarget(target) {
+		return
+	}
+
 	codeOnly := stripJSComments(content)
 	lines := splitCodeLines(codeOnly)
-	vendorContext := isLikelyVendorTarget(target)
 
 	if corsWildcardPattern.MatchString(codeOnly) || manualCorsPattern.MatchString(codeOnly) {
 		add("CORS Wildcard With Credentials", "HIGH", "origin: '*' with credentials: true")
@@ -164,10 +168,6 @@ func collectHeuristicFindings(target, content string, add func(name, priority, m
 
 		if dynamicCodePattern.MatchString(text) {
 			add("Dynamic Code Execution Sink", "HIGH", formatLineEvidence(line.Number, text))
-		}
-
-		if vendorContext {
-			continue
 		}
 
 		if commandExecPattern.MatchString(text) {
@@ -653,15 +653,24 @@ func firstNonEmpty(values ...string) string {
 
 func isLikelyVendorTarget(target string) bool {
 	lower := strings.ToLower(target)
+	base := strings.ToLower(filepath.Base(target))
 
 	vendorMarkers := []string{
 		".min.js",
+		".xhtml.js",
 		"jquery",
 		"bootstrap",
 		"react",
 		"vue",
 		"redux",
 		"moment",
+		"modernizr",
+		"datatables",
+		"fitvids",
+		"migrate",
+		"bxslider",
+		"i18next",
+		"richfaces",
 		"chart",
 		"vendor",
 		"bundle",
@@ -673,6 +682,14 @@ func isLikelyVendorTarget(target string) bool {
 		if strings.Contains(lower, marker) {
 			return true
 		}
+	}
+
+	if regexp.MustCompile(`^[a-f0-9]{8,}\.js$`).MatchString(base) {
+		return true
+	}
+
+	if regexp.MustCompile(`^[a-f0-9-]{20,}\.js$`).MatchString(base) {
+		return true
 	}
 
 	return false
