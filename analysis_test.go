@@ -80,6 +80,47 @@ element.innerHTML = "<em>trusted</em>";
 	}
 }
 
+func TestScanContentAvoidsRegexExecFalsePositive(t *testing.T) {
+	content := `const results = regex.exec(src);`
+	results := scanContent("sample.js", content)
+
+	if findResult(results, "Command Execution Sink") != nil {
+		t.Fatalf("unexpected command execution finding: %#v", results)
+	}
+	if findResult(results, "Potential Command Injection") != nil {
+		t.Fatalf("unexpected command injection finding: %#v", results)
+	}
+}
+
+func TestScanContentSkipsMinifiedHeuristicNoise(t *testing.T) {
+	minified := strings.Repeat("a", 700) + " eval(userInput) " + strings.Repeat("b", 700)
+	results := scanContent("sample.js", minified)
+
+	if findResult(results, "Dynamic Code Execution Sink") != nil {
+		t.Fatalf("unexpected dynamic code finding in minified line: %#v", results)
+	}
+}
+
+func TestScanContentSkipsNoisyHeuristicsForVendorFiles(t *testing.T) {
+	content := `
+const r = regex.exec(src);
+const x = Object.assign({}, req.body);
+const y = value && value.constructor.prototype;
+`
+
+	results := scanContent("jquery-3.6.0.min.js", content)
+
+	if findResult(results, "Command Execution Sink") != nil {
+		t.Fatalf("unexpected command execution finding for vendor file: %#v", results)
+	}
+	if findResult(results, "Object Merge With User Input") != nil {
+		t.Fatalf("unexpected object merge finding for vendor file: %#v", results)
+	}
+	if findResult(results, "Potential Prototype Pollution") != nil {
+		t.Fatalf("unexpected prototype pollution finding for vendor file: %#v", results)
+	}
+}
+
 func findResult(results []Result, name string) *Result {
 	for i := range results {
 		if results[i].Name == name {

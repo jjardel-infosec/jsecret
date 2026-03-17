@@ -39,6 +39,9 @@ var lowEntropyPatterns = map[string]bool{
 	"GitHub OAuth App Secret":    true,
 	"Loggly Token":               true,
 	"Base64 High Entropy String": true,
+	"Mistral API Key":            true,
+	"Together AI Key":            true,
+	"Algolia API Key":            true,
 }
 
 var (
@@ -49,7 +52,7 @@ var (
 	sqlKeywordPattern           = regexp.MustCompile(`(?i)\b(?:select|insert|update|delete|from|where|union)\b`)
 	dynamicDataPattern          = regexp.MustCompile(`(?:\+|\$\{)`)
 	dynamicCodePattern          = regexp.MustCompile("(?i)\\b(?:eval\\s*\\(|new\\s+Function\\s*\\(|set(?:Timeout|Interval)\\s*\\(\\s*['\"`]|vm\\.runIn(?:New|This)Context\\s*\\()")
-	commandExecPattern          = regexp.MustCompile(`(?i)(?:child_process\.)?(?:exec|execSync|spawn|spawnSync|fork)\s*\(`)
+	commandExecPattern          = regexp.MustCompile(`(?i)(?:^|[^.$\w])(?:child_process\.)?(?:exec|execSync|spawn|spawnSync|fork)\s*\(`)
 	shellTruePattern            = regexp.MustCompile(`(?i)shell\s*:\s*true`)
 	weakCryptoPattern           = regexp.MustCompile(`(?i)(?:createHash\s*\(\s*['"](?:md5|sha1)['"]|CryptoJS\.(?:MD5|SHA1)\s*\(|\bmd5\s*\(|\bsha1\s*\(|createCipher\s*\(|createDecipher\s*\(|\bDES\b|\bRC4\b|\bECB\b)`)
 	insecureTLSPattern          = regexp.MustCompile(`(?i)(?:rejectUnauthorized\s*:\s*false|strictSSL\s*:\s*false|process\.env\.NODE_TLS_REJECT_UNAUTHORIZED\s*=\s*['"]?0['"]?|NODE_TLS_REJECT_UNAUTHORIZED\s*=\s*['"]?0['"]?)`)
@@ -65,7 +68,7 @@ var (
 	corsWildcardPattern         = regexp.MustCompile(`(?is)cors\s*\(\s*{[^}]*origin\s*:\s*['"]\*['"][^}]*credentials\s*:\s*true`)
 	manualCorsPattern           = regexp.MustCompile(`(?is)Access-Control-Allow-Origin['"]?\s*[:=,]\s*['"]\*['"][\s\S]{0,200}Access-Control-Allow-Credentials['"]?\s*[:=,]\s*true`)
 	// Security heuristics
-	prototypePollutionPattern  = regexp.MustCompile(`(?i)(?:__proto__|constructor\s*\.\s*prototype|\[['"](?:__proto__|constructor|prototype)['"]\])`)
+	prototypePollutionPattern  = regexp.MustCompile(`(?i)(?:__proto__\s*[:=]|\[['"]__proto__['"]\]\s*=|constructor\s*\.\s*prototype\s*[:=]|Object\.setPrototypeOf\s*\(|Reflect\.setPrototypeOf\s*\()`)
 	templateInjectionPattern   = regexp.MustCompile(`(?i)(?:\{\{\s*[^}]*\s*\}\}|<%[^%]*%>|\$\{[^}]*\}.*render|nunjucks\.render|ejs\.render|pug\.render|handlebars\.compile|Mustache\.render)`)
 	insecureDeserializePattern = regexp.MustCompile(`(?i)(?:unserialize\s*\(|pickle\.loads?\s*\(|yaml\.(?:load|unsafe_load)\s*\(|JSON\.parse\s*\([^)]*(?:localStorage|sessionStorage|req\.|request\.)|deserialize\s*\([^)]*(?:body|params|query))`)
 	objectMergePattern         = regexp.MustCompile(`(?i)(?:Object\.assign\s*\([^,]*,\s*(?:req\.|request\.|params|body|query)|_\.merge\s*\(|lodash\.merge\s*\(|\$\.extend\s*\(true|deepmerge\s*\()`)
@@ -81,7 +84,7 @@ func scanContent(target, content string) []Result {
 	}
 
 	collectSignatureFindings(content, collector.add)
-	collectHeuristicFindings(content, collector.add)
+	collectHeuristicFindings(target, content, collector.add)
 
 	return collector.results
 }
@@ -116,6 +119,10 @@ func collectSignatureFindings(content string, add func(name, priority, match str
 				continue
 			}
 
+			if sig.Name == "Base64 High Entropy String" && isHexString(normalizedMatch) {
+				continue
+			}
+
 			// For patterns prone to false positives, require minimum entropy
 			if lowEntropyPatterns[sig.Name] {
 				if shannonEntropy(match) < 3.5 {
@@ -128,9 +135,10 @@ func collectSignatureFindings(content string, add func(name, priority, match str
 	}
 }
 
-func collectHeuristicFindings(content string, add func(name, priority, match string)) {
+func collectHeuristicFindings(target, content string, add func(name, priority, match string)) {
 	codeOnly := stripJSComments(content)
 	lines := splitCodeLines(codeOnly)
+	vendorContext := isLikelyVendorTarget(target)
 
 	if corsWildcardPattern.MatchString(codeOnly) || manualCorsPattern.MatchString(codeOnly) {
 		add("CORS Wildcard With Credentials", "HIGH", "origin: '*' with credentials: true")
@@ -139,6 +147,10 @@ func collectHeuristicFindings(content string, add func(name, priority, match str
 	for _, line := range lines {
 		text := strings.TrimSpace(line.Text)
 		if text == "" {
+			continue
+		}
+
+		if isLikelyMinifiedLine(text) {
 			continue
 		}
 
@@ -152,6 +164,10 @@ func collectHeuristicFindings(content string, add func(name, priority, match str
 
 		if dynamicCodePattern.MatchString(text) {
 			add("Dynamic Code Execution Sink", "HIGH", formatLineEvidence(line.Number, text))
+		}
+
+		if vendorContext {
+			continue
 		}
 
 		if commandExecPattern.MatchString(text) {
@@ -633,4 +649,62 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func isLikelyVendorTarget(target string) bool {
+	lower := strings.ToLower(target)
+
+	vendorMarkers := []string{
+		".min.js",
+		"jquery",
+		"bootstrap",
+		"react",
+		"vue",
+		"redux",
+		"moment",
+		"chart",
+		"vendor",
+		"bundle",
+		"chunk",
+		"node_modules",
+	}
+
+	for _, marker := range vendorMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isLikelyMinifiedLine(line string) bool {
+	if len(line) < 600 {
+		return false
+	}
+
+	spaces := 0
+	for i := 0; i < len(line); i++ {
+		switch line[i] {
+		case ' ', '\t':
+			spaces++
+		}
+	}
+
+	return float64(spaces)/float64(len(line)) < 0.02
+}
+
+func isHexString(value string) bool {
+	trimmed := strings.Trim(value, `"'`)
+	if len(trimmed) < 16 {
+		return false
+	}
+
+	for _, r := range trimmed {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+
+	return true
 }

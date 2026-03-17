@@ -38,7 +38,7 @@ func init() {
 		{"Private Key Block", `-----BEGIN (RSA|DSA|EC|OPENSSH)? PRIVATE KEY-----`, "CRITICAL"},
 		{"PGP Private Key Block", `-----BEGIN PGP PRIVATE KEY BLOCK-----`, "CRITICAL"},
 		{"Basic Auth String", `(?i)(username|user|email)['"\s:=]+[^\s'"@]{1,100}['"].*?(password|pwd)['"\s:=]+[^\s'"]{4,100}`, "CRITICAL"},
-		{"Password Assignment", `(?i)\b(password|passwd|pwd)['"\s:=]+[^\s'"]{4,100}`, "CRITICAL"},
+		{"Password Assignment", `(?i)\b(?:password|passwd|pwd)\b\s*[:=]\s*['"][^'"\s<>]{8,100}['"]`, "CRITICAL"},
 
 		// 🔑 High: Plataformas, Git de Repos, Comunicação e SaaS
 		{"GitHub Token", `ghp_[0-9a-zA-Z]{36}`, "HIGH"},
@@ -84,9 +84,9 @@ func init() {
 		{"Hugging Face Token", `hf_[a-zA-Z0-9]{34}`, "HIGH"},
 		{"Replicate API Token", `r8_[a-zA-Z0-9]{37}`, "HIGH"},
 		{"Google AI Studio Key", `AIzaSy[a-zA-Z0-9_-]{33}`, "CRITICAL"},
-		{"Mistral API Key", `[a-zA-Z0-9]{32}`, "MEDIUM"},
+		{"Mistral API Key", `(?i)(?:mistral|MISTRAL_API_KEY|x-api-key)[_\-\s.:"'=]{0,20}[a-z0-9]{32}(?![a-z0-9])`, "MEDIUM"},
 		{"Groq API Key", `gsk_[a-zA-Z0-9]{52}`, "HIGH"},
-		{"Together AI Key", `[a-f0-9]{64}`, "MEDIUM"},
+		{"Together AI Key", `(?i)(?:together|TOGETHER_API_KEY)[_\-\s.:"'=]{0,20}[a-f0-9]{64}(?![a-f0-9])`, "MEDIUM"},
 
 		// ☁️ Modern Cloud/SaaS
 		{"Supabase API Key", `sbp_[a-f0-9]{40}`, "HIGH"},
@@ -107,9 +107,9 @@ func init() {
 		{"Doppler Token", `dp\.(?:st|ct|sa|scim|audit)\.[a-zA-Z0-9_]{40,}`, "HIGH"},
 		{"Figma Token", `figd_[a-zA-Z0-9_-]{40,}`, "HIGH"},
 		{"Notion API Key", `secret_[a-zA-Z0-9]{43}`, "HIGH"},
-		{"Airtable API Key", `key[a-zA-Z0-9]{14}`, "HIGH"},
+		{"Airtable API Key", `(?i)(?:airtable|api[_-]?key)[_\-\s.:"'=]{0,20}key[a-zA-Z0-9]{14}\b`, "HIGH"},
 		{"Contentful API Key", `CFPAT-[a-zA-Z0-9_-]{43}`, "HIGH"},
-		{"Algolia API Key", `[a-f0-9]{32}`, "MEDIUM"},
+		{"Algolia API Key", `(?i)(?:algolia|x-algolia-api-key|algolia[_-]?api[_-]?key)[_\-\s.:"'=]{0,20}[a-f0-9]{32}(?![a-f0-9])`, "MEDIUM"},
 		{"Mapbox Token", `pk\.[a-zA-Z0-9]{60,}`, "MEDIUM"},
 		{"Mapbox Secret", `sk\.[a-zA-Z0-9]{60,}`, "HIGH"},
 
