@@ -134,6 +134,22 @@ eval(userInput);
 	}
 }
 
+func TestScanContentSkipsHeuristicsForWebpackBundles(t *testing.T) {
+	content := `(self.webpackChunk=self.webpackChunk||[]).push([[1],{1:function(){eval(userInput);window.postMessage(payload,"*");}}]);`
+	results := scanContent("app.js", content)
+	if len(results) != 0 {
+		t.Fatalf("expected no heuristic findings for webpack bundle, got %#v", results)
+	}
+}
+
+func TestScanContentSkipsBase64AlphabetNoise(t *testing.T) {
+	content := `const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";`
+	results := scanContent("vendor.js", content)
+	if findResult(results, "Base64 High Entropy String") != nil {
+		t.Fatalf("unexpected base64 noise finding: %#v", results)
+	}
+}
+
 func findResult(results []Result, name string) *Result {
 	for i := range results {
 		if results[i].Name == name {

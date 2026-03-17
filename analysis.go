@@ -23,11 +23,13 @@ var knownSafeStrings = map[string]bool{
 	// MD5 empty string
 	"d41d8cd98f00b204e9800998ecf8427e": true,
 	// Sequential alphabets (common in charset definitions)
-	"0123456789abcdefghijklmnopqrstuv":     true,
-	"abcdefghijklmnopqrstuvwxyz012345":     true,
-	"0123456789abcdef":                     true,
-	"0123456789abcdefghijklmnopqrstuvwxyz": true,
-	"abcdefghijklmnopqrstuvwxyz":           true,
+	"0123456789abcdefghijklmnopqrstuv":                                  true,
+	"abcdefghijklmnopqrstuvwxyz012345":                                  true,
+	"0123456789abcdef":                                                  true,
+	"0123456789abcdefghijklmnopqrstuvwxyz":                              true,
+	"abcdefghijklmnopqrstuvwxyz":                                        true,
+	"abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz0123456789+/":  true,
+	"abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz0123456789+/=": true,
 	// Common test/example values
 	"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx":         true,
 	"00000000000000000000000000000000":         true,
@@ -84,7 +86,7 @@ func scanContent(target, content string) []Result {
 		seen:   make(map[string]struct{}),
 	}
 
-	collectSignatureFindings(content, collector.add)
+	collectSignatureFindings(target, content, collector.add)
 	collectHeuristicFindings(target, content, collector.add)
 
 	return collector.results
@@ -110,8 +112,14 @@ func (c *resultCollector) add(name, priority, match string) {
 	})
 }
 
-func collectSignatureFindings(content string, add func(name, priority, match string)) {
+func collectSignatureFindings(target, content string, add func(name, priority, match string)) {
+	vendorTarget := isLikelyVendorTarget(target)
+
 	for _, sig := range Signatures {
+		if vendorTarget && (sig.Name == "Base64 High Entropy String" || sig.Name == "Localhost Reference" || sig.Name == "Private IP (Internal)" || sig.Name == "Dev/Stage URL") {
+			continue
+		}
+
 		matches := sig.Regex.FindAllString(content, -1)
 		for _, match := range matches {
 			// Skip known safe strings (common hashes, test values)
@@ -121,6 +129,10 @@ func collectSignatureFindings(content string, add func(name, priority, match str
 			}
 
 			if sig.Name == "Base64 High Entropy String" && isHexString(normalizedMatch) {
+				continue
+			}
+
+			if sig.Name == "Base64 High Entropy String" && isLikelyBase64Noise(normalizedMatch) {
 				continue
 			}
 
@@ -138,6 +150,10 @@ func collectSignatureFindings(content string, add func(name, priority, match str
 
 func collectHeuristicFindings(target, content string, add func(name, priority, match string)) {
 	if isLikelyVendorTarget(target) {
+		return
+	}
+
+	if isLikelyBundledContent(content) {
 		return
 	}
 
@@ -657,6 +673,7 @@ func isLikelyVendorTarget(target string) bool {
 
 	vendorMarkers := []string{
 		".min.js",
+		".chunk.js",
 		".xhtml.js",
 		"jquery",
 		"bootstrap",
@@ -676,6 +693,13 @@ func isLikelyVendorTarget(target string) bool {
 		"bundle",
 		"chunk",
 		"node_modules",
+		"app.js",
+		"all.js",
+		"js.js",
+		"fontawesome.js",
+		"player.js",
+		"runtime.js",
+		"polyfills.js",
 	}
 
 	for _, marker := range vendorMarkers {
@@ -724,4 +748,38 @@ func isHexString(value string) bool {
 	}
 
 	return true
+}
+
+func isLikelyBase64Noise(value string) bool {
+	trimmed := strings.Trim(value, `"'`)
+	if trimmed == "" {
+		return true
+	}
+
+	if strings.Contains(trimmed, "http") {
+		return true
+	}
+
+	if strings.Contains(trimmed, "/") && !strings.ContainsAny(trimmed, "+=") {
+		return true
+	}
+
+	if shannonEntropy(trimmed) < 4.2 {
+		return true
+	}
+
+	return false
+}
+
+func isLikelyBundledContent(content string) bool {
+	lower := strings.ToLower(content)
+	if strings.Contains(lower, "webpackchunk") || strings.Contains(lower, "webpackjsonp") || strings.Contains(lower, "webpackjsonprlms") {
+		return true
+	}
+
+	if strings.Count(content, "\n") < 8 && len(content) > 6000 {
+		return true
+	}
+
+	return false
 }
