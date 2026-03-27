@@ -1,31 +1,15 @@
-# jsecret v2.4 (AI/Cloud & Security Heuristics Enhanced!)
+# jsecret v3.1 — The Ultimate JS Security Scanner
 
-`jsecret` is a simple, extremely fast, and concurrent tool designed to detect sensitive data (API keys, tokens, passwords, etc.) in source code files, specifically optimized for JavaScript.
+`jsecret` is a blazing-fast, zero-dependency Go tool that detects secrets, credentials, and security vulnerabilities in JavaScript/TypeScript files. It combines **200+ regex signatures** for known token formats with **50+ heuristic checks** for code-level security flaws.
 
-## What's New in v2.4?
+## What's New in v3.1
 
-- **Enhanced AI/ML Token Detection:** Added support for OpenAI Project Keys (`sk-proj-`), Anthropic (`sk-ant-`), Google AI Studio, Groq, Mistral, and Together AI.
-- **Expanded Cloud Service Coverage:** New integration with Grafana, Postman, Doppler, Figma, Notion, Airtable, Contentful, Mapbox, and more modern SaaS platforms.
-- **Improved Accuracy:** Fixed false positives in Slack, Dropbox, Asana, and Telegram token patterns; added entropy validation for generic patterns.
-- **Advanced Security Heuristics:** Detects Prototype Pollution, Template Injection, Insecure Deserialization, Mass Assignment, JWT weak algorithms, and hardcoded JWT secrets.
-- **Safelist Pattern:** Known hashes (SHA1/256/MD5 empty strings) and test values excluded from detection.
-- **Hybrid scanning:** Regex signatures for known tokens + heuristic analysis for JavaScript security flaws.
-- **Line-aware evidence:** Heuristic findings include the line number and code snippet that triggered the alert.
-- **CSV export:** Built-in CSV reporting via `-csv`.
-
-## Improvements in v2.4
-
-### Fixed False Positive Patterns
-- **Slack Token:** Made suffix required for stricter matching
-- **Dropbox Token:** Increased minimum length to 130 chars to avoid file path matches
-- **Asana Token:** Added word boundaries and limited to hex characters only
-- **Telegram Token:** Added word boundaries and range validation (8-10 digits for chat ID)
-
-### Pattern Quality Enhancements
-- **Entropy Validation:** Generic hex patterns now require Shannon entropy ≥ 3.5
-- **Safelist Filtering:** Known test hashes and placeholder values automatically excluded
-- **Context Requirements:** API patterns include minimum length and format strictness requirements
-- **Negative Lookaheads:** Prevent token pattern extension into adjacent code
+- **`.jsecretignore` support** — exclude paths with gitignore-style patterns
+- **Test/mock file awareness** — suppresses generic noisy signatures on `*.test.js`, `*.spec.js`, `__tests__/`, `__mocks__/`, `fixtures/` etc.
+- **Bcrypt/Argon2/Scrypt hash recognition** — properly hashed passwords are no longer flagged as hardcoded credentials
+- **Expanded entropy thresholds** — 10 more signatures now have per-pattern entropy gates (Fastly, Splunk, Logz.io, Hetzner, Vultr, etc.)
+- **File path / CSS selector FP filter** — values starting with `/`, `./`, `../` or `.class-name` are no longer flagged as secrets
+- **52 tests** with CI workflow and cross-compilation Makefile
 
 ## Installation
 
@@ -35,103 +19,185 @@ go install github.com/jjardel-infosec/jsecret@latest
 ```
 
 ### From Source
-1. Clone and Build:
-   ```bash
-   git clone https://github.com/jjardel-infosec/jsecret.git
-   cd jsecret
-   go build -o jsecret
-   ```
+```bash
+git clone https://github.com/jjardel-infosec/jsecret.git
+cd jsecret
+go build -o jsecret
+```
 
-2. Move to global path:
-   ```bash
-   sudo mv jsecret /usr/local/bin/
-   ```
+Move to global path (Linux/macOS):
+```bash
+sudo mv jsecret /usr/local/bin/
+```
 
 ## Usage
 
 ### Flags
-- `-u`: Scan a single URL.
-- `-f`: Scan a list of URLs from a file.
-- `-d`: Recursive directory scan for `.js` files.
-- `-o`: Save results to a plain TXT file.
-- `-csv`: Export results to a formatted CSV file (Target, Priority, Type, Evidence).
-- `-t`: Set concurrent threads (default: 50).
-- `-s`: Silent mode (no banner).
-- `-h`: Show help.
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-u` | Single URL to scan | |
+| `-f` | File containing list of URLs | |
+| `-d` | Directory to scan recursively | |
+| `-o` | Save results to TXT file | |
+| `-csv` | Save results to CSV file | |
+| `-json` | Save results to JSON file | |
+| `-sarif` | Save results to SARIF v2.1.0 file | |
+| `-min` | Minimum severity: CRITICAL, HIGH, MEDIUM, LOW | all |
+| `-proxy` | HTTP/HTTPS proxy URL | |
+| `-ext` | Custom file extensions (comma-separated) | `.js,.mjs,.cjs,.jsx,.ts,.tsx,.vue,.svelte` |
+| `-t` | Concurrent threads | 50 |
+| `-s` | Silent mode (no banner/summary) | false |
+| `-strict` | Exit code 1 if CRITICAL/HIGH findings | false |
+| `-h` | Show help | |
 
 ### Examples
 
-**1. Pipe through other tools**
 ```bash
+# Pipe from other tools
 cat subdomains.txt | httpx | jsecret
-```
 
-**2. Recursive local scan**
-```bash
-jsecret -d ./my_project -t 100
-```
+# Recursive local scan with severity filter
+jsecret -d ./my_project -min HIGH -strict
 
-**3. Generate CSV Report**
-```bash
-jsecret -f js_urls.txt -csv reconnaissance_report.csv
-```
+# URL scan with JSON output
+jsecret -u https://example.com/app.js -json findings.json
 
-**4. Single URL analysis**
-```bash
-jsecret -u https://example.com/assets/config.js
+# Bulk scan with SARIF output for CI integration
+jsecret -f urls.txt -sarif report.sarif -strict
+
+# Custom extensions and proxy
+jsecret -d . -ext .js,.ts,.vue -proxy http://127.0.0.1:8080
+
+# CSV report with high concurrency
+jsecret -f js_urls.txt -csv report.csv -t 200
+
+# Directory scan, only critical findings
+jsecret -d /path/to/project -min CRITICAL -o critical.txt
 ```
 
 ## Detection Coverage
 
-`jsecret` now uses two complementary passes:
+### Signature Pass (200+ patterns)
 
-### Signature Pass
-**Cloud & API Credentials (80+ patterns):**
-- AWS (Access Key ID, Secret Key, STS Session Token)
-- Azure, Google Cloud, Alibaba Cloud
-- Vault (Hashicorp) - `hvs.` and legacy `s.` formats
-- GitHub, GitLab, Gitea, Bitbucket tokens
-- **AI/ML Services:** OpenAI (`sk-` and `sk-proj-`), Anthropic (`sk-ant-`), Hugging Face, Google AI Studio, Groq, Mistral
-- **Modern Cloud/SaaS:** Supabase, Vercel, NPM, PyPI, Clerk, Planetscale, Neon, Railway, Render, Google OAuth, Grafana, Postman, Doppler, Figma, Notion, Airtable, Contentful, Mapbox
-- Datadog, Bugsnag, Loggly, PagerDuty, SendGrid, Slack, Telegram, Asana, Dropbox
-- Database URIs (MongoDB, Redis, PostgreSQL, MySQL, etc.)
-- JWT/Bearer tokens, Private RSA/SSH/PGP keys
-- Hardcoded credentials in variable assignments
+| Category | Examples | Count |
+|----------|---------|-------|
+| **Cloud Providers** | AWS (Access Key, Secret, STS, RDS), GCP, Azure, Alibaba, DigitalOcean, Heroku | 20+ |
+| **AI/ML Services** | OpenAI, Anthropic, DeepSeek, xAI/Grok, Perplexity, Fireworks, HuggingFace, Groq, Cohere, Mistral, Together, Pinecone, Weaviate, Qdrant, Replicate | 17 |
+| **Databases** | MongoDB, PostgreSQL, MySQL, Redis, Elasticsearch, Snowflake, CockroachDB, ClickHouse, Cassandra, Supabase, Firebase, JDBC, RabbitMQ, Memcached, InfluxDB | 20+ |
+| **Git Platforms** | GitHub (PAT, Fine-Grained, OAuth), GitLab (PAT, Runner), Bitbucket | 10 |
+| **CI/CD** | CircleCI, Travis, Jenkins, Azure DevOps, GitHub Actions, Buildkite, Terraform, Pulumi | 12 |
+| **Payments** | Stripe (Secret/Publishable), Square, Braintree, PayPal, Adyen, Coinbase, Plaid | 9 |
+| **Communication** | Slack (Token/Webhook), Twilio, SendGrid, Mailgun, Telegram, Discord, Postmark, Mailchimp, SparkPost, Vonage, Pusher, Ably | 15+ |
+| **Modern SaaS** | Supabase, Vercel, Clerk, PlanetScale, Neon, Railway, Render, Fly.io, Deno Deploy, Expo, Arcjet, Trigger.dev, Resend, Infisical, Doppler | 20+ |
+| **Secrets/Vault** | HashiCorp Vault, 1Password Connect, Doppler, Kubernetes Secrets | 8 |
+| **Observability** | Datadog, Sentry, New Relic, Bugsnag, Grafana, Splunk HEC, Dynatrace, Honeycomb, LaunchDarkly, PagerDuty, Elastic APM, Logz.io | 15+ |
+| **DevOps/Infra** | Scaleway, Hetzner, Linode, Vultr, Fastly, Cloudflare Workers KV | 10+ |
+| **Keys & Certs** | RSA/DSA/EC/OPENSSH/PGP Private Keys, PEM Certificates | 3 |
+| **Generic** | JWT, Bearer Tokens, Base64 High Entropy, Password Assignments, Basic Auth | 15+ |
 
-### Heuristic Pass
-**Security Vulnerability Patterns:**
-- **Code Injection:** Dynamic code execution (`eval`, `new Function`), potential SQL injection, command injection
-- **XSS & HTML Injection:** DOM XSS sinks (`innerHTML`, `dangerouslySetInnerHTML`, `insertAdjacentHTML`), taint tracking
-- **SSRF & Open Redirect:** Untrusted outbound requests, user-controlled redirects
-- **Path Traversal:** File access with user input
-- **Template Injection:** Jinja, EJS, Handlebars, Mustache rendering with user input
-- **Prototype Pollution:** Direct prototype object mutation (`__proto__`, `constructor.prototype`)
-- **Insecure Deserialization:** `JSON.parse` from untrusted sources, `yaml.load`, `pickle.loads`
-- **Mass Assignment:** Direct object updates with request body without field filtering
-- **Web Storage & Cookies:** Sensitive data stored in `localStorage`, `sessionStorage`, or `document.cookie`
-- **Weak Cryptography:** MD5, SHA1, DES, RC4, ECB mode
-- **Predictable Token Generation:** Security-sensitive variables using `Math.random()`
-- **JWT Weaknesses:** Weak algorithms (`none`, `HS256`), hardcoded secrets
-- **TLS Validation Disabled:** `rejectUnauthorized: false`, `NODE_TLS_REJECT_UNAUTHORIZED`
-- **CORS Misconfiguration:** Wildcard origin with credentials enabled
-- **Wildcard postMessage:** Cross-window messaging without origin verification
+### Heuristic Pass (50+ detections)
 
-Heuristic findings are intentionally labeled as `Potential ...` when the result depends on code context rather than an exact signature.
+| Category | Detections |
+|----------|------------|
+| **Injection** | SQL Injection, NoSQL Injection, Command Injection, Template Injection |
+| **XSS** | DOM XSS (innerHTML, outerHTML, document.write, dangerouslySetInnerHTML), HTML Injection Sinks |
+| **SSRF/Redirect** | Untrusted Outbound Requests, Open Redirect |
+| **Crypto** | Weak Cryptography (MD5, SHA1, DES, RC4, ECB), Predictable Token Generation (Math.random) |
+| **Auth/Session** | JWT Weak Algorithm, Hardcoded JWT Secret, Hardcoded Credentials, Web Storage Sensitive Data |
+| **CORS** | Wildcard Origin + Credentials, Origin Reflection without validation |
+| **Cookies** | Missing Secure/HttpOnly flags |
+| **Prototype** | Prototype Pollution, Object Merge with User Input, Mass Assignment |
+| **Config** | Debug Mode in Production, GraphQL Introspection Enabled, Exposed Source Maps |
+| **Leaks** | Exposed Stack Trace, NPM Config Leak (_auth/_authToken) |
+| **Privacy** | Path Traversal, Insecure Deserialization, TLS Validation Disabled |
+| **ReDoS** | Nested quantifiers `(a+)+`, triple greedy `.*.*.*`, star-star overlap, nested repetition |
+| **postMessage** | Wildcard target origin |
 
-### Safelist Features
-- **Known Safe Hashes:** SHA1/256/MD5 empty string hashes, sequential character sets
-- **Test Values:** Common placeholder strings (`xxxxxxxx`, `00000000`) excluded
-- **Entropy Validation:** Generic patterns require minimum Shannon entropy of 3.5 to reduce false positives
+### False Positive Prevention
 
-## Output Format
+- **67+ placeholder patterns** (changeme, your_key_here, ${TOKEN}, {{SECRET}}, etc.)
+- **Per-pattern entropy thresholds** — 25+ signatures require minimum Shannon entropy
+- **Test/mock file suppression** — generic signatures (API Key Generic, Session ID, etc.) suppressed in test/spec/fixture files
+- **Bcrypt/Argon2/Scrypt detection** — properly hashed passwords are never flagged
+- **Minified content skip** — noise-prone signatures suppressed on minified lines
+- **Vendor/bundle detection** — skips jQuery, React, webpack bundles, hex-named chunks
+- **Known safe strings** — SHA1/256/MD5 empty hashes, Base64 charsets, test values
+- **Code reference filter** — skips `process.env.*`, `config.*` variable dereferences
+- **File path filter** — skips values that are file paths (`/usr/...`, `./...`, `../...`)
+- **CSS class filter** — skips values that look like CSS selectors (`.btn-primary`)
+- **Repeated character filter** — skips strings with >60% same character
+- **`.jsecretignore`** — user-defined exclusion patterns (see below)
 
-### Terminal (Colored)
-`[target] [PRIORITY] Finding Name : match_content`
+### `.jsecretignore`
 
-### CSV Export
+Create a `.jsecretignore` file in the scan root directory. Uses glob-style patterns:
+
+```
+# Skip test directories
+tests/
+__tests__/
+__mocks__/
+
+# Skip specific files
+config.example.js
+*.test.js
+*.spec.ts
+
+# Skip generated code
+**/generated/**
+dist/
+build/
+```
+
+## Output Formats
+
+### TXT (default terminal)
+```
+[https://example.com/app.js] [CRITICAL] AWS Access Key ID : AKIAIOSFODNN7EXAMPLE
+```
+
+### JSON (`-json`)
+```json
+[
+  {
+    "target": "https://example.com/app.js",
+    "priority": "CRITICAL",
+    "finding": "AWS Access Key ID",
+    "evidence": "AKIAIOSFODNN7EXAMPLE",
+    "category": "signature"
+  }
+]
+```
+
+### SARIF v2.1.0 (`-sarif`)
+Compatible with GitHub Code Scanning, VS Code SARIF Viewer, and other SARIF-aware tools.
+
+### CSV (`-csv`)
 | Target | Priority | Finding Type | Evidence |
-| :--- | :--- | :--- | :--- |
-| http://site.com/v.js | CRITICAL | AWS Access Key ID | AKIA... |
+|--------|----------|-------------|----------|
+| app.js | CRITICAL | AWS Access Key ID | AKIA... |
+
+## CI/CD Integration
+
+Use `-strict` to fail pipelines when CRITICAL or HIGH findings are detected:
+
+```bash
+jsecret -d ./src -min HIGH -strict -sarif results.sarif
+```
+
+Exit code `1` = findings found. Upload `results.sarif` to GitHub Code Scanning or your SIEM.
+
+## Architecture
+
+- **Zero external dependencies** — stdlib-only Go
+- **Worker pool** — configurable concurrency (default 50 workers)
+- **Two-pass analysis** — regex signatures + heuristic code analysis
+- **Content dedup** — MD5-based `sync.Map` prevents re-scanning identical content
+- **Connection pooling** — 200 idle connections, 20 per host
+- **Body limit** — 10MB max to prevent OOM on large files
+- **Source map resolution** — follows `sourceMappingURL` to scan original sources
+- **Prefix pre-filtering** — static substring check before regex evaluation
 
 ---
 **Maintained by @jjardel-infosec**

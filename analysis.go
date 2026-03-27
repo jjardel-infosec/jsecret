@@ -23,6 +23,9 @@ var knownSafeStrings = map[string]bool{
 	"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855": true,
 	// MD5 empty string
 	"d41d8cd98f00b204e9800998ecf8427e": true,
+	// SHA256 test vectors
+	"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad": true,
+	"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08": true,
 	// Sequential alphabets (common in charset definitions)
 	"0123456789abcdefghijklmnopqrstuv":                                  true,
 	"abcdefghijklmnopqrstuvwxyz012345":                                  true,
@@ -31,21 +34,98 @@ var knownSafeStrings = map[string]bool{
 	"abcdefghijklmnopqrstuvwxyz":                                        true,
 	"abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz0123456789+/":  true,
 	"abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz0123456789+/=": true,
+	"abcdefghijklmnopqrstuvwxyz0123456789":                              true,
 	// Common test/example values
 	"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx":         true,
 	"00000000000000000000000000000000":         true,
 	"11111111111111111111111111111111":         true,
 	"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": true,
+	"test1234567890test1234567890test":         true,
+	"sample_key_do_not_use":                    true,
+	// React / Angular / Next.js framework strings
+	"__react_internal_instance$": true,
+	"__next_data__":              true,
+	"__zone_symbol__":            true,
 }
 
-// lowEntropyPatterns are signature names that should require entropy validation
-var lowEntropyPatterns = map[string]bool{
-	"GitHub OAuth App Secret":    true,
+// lowEntropyPatterns require minimum entropy for matches
+var lowEntropyPatterns = map[string]float64{
+	"GitHub OAuth App Secret":      3.5,
+	"Loggly Token":                 3.5,
+	"Base64 High Entropy String":   4.2,
+	"Mistral API Key":              3.5,
+	"Together AI Key":              3.5,
+	"Algolia API Key":              3.5,
+	"API Key in Variable":          3.2,
+	"Secret in Variable":           3.2,
+	"API Key Generic Detector":     3.5,
+	"Session ID":                   3.0,
+	"CSRF Token":                   3.0,
+	"Cohere API Key":               3.5,
+	"Weaviate API Key":             3.5,
+	"Qdrant API Key":               3.2,
+	"Bugsnag API Key":              3.5,
+	"Datadog API Key":              3.5,
+	"Fastly API Token":             3.5,
+	"Elastic APM Secret Token":     3.5,
+	"Splunk HEC Token":             3.5,
+	"Logz.io Token":                3.5,
+	"Vultr API Key":                3.5,
+	"Linode Personal Access Token": 3.5,
+	"Hetzner API Token":            3.5,
+	"PayPal Client Secret":         3.5,
+	"Adyen API Key":                3.5,
+}
+
+// skipOnMinified lists sigs suppressed on minified lines to reduce noise
+var skipOnMinified = map[string]bool{
+	"Private IP (Internal)":      true,
+	"Localhost Reference":        true,
+	"Dev/Stage URL":              true,
+	"AWS S3 Bucket URL":          true,
+	"Session ID":                 true,
+	"Cookie Name Generic":        true,
+	"CSRF Token":                 true,
+	"Bearer Token Generic":       true,
+	"API Key Generic Detector":   true,
 	"Loggly Token":               true,
+	"JJARDEL (Legacy)":           true,
+	"SEGREDOS WAR (Legacy)":      true,
 	"Base64 High Entropy String": true,
-	"Mistral API Key":            true,
-	"Together AI Key":            true,
-	"Algolia API Key":            true,
+}
+
+// isLikelyCodeReference checks if a matched value looks like a variable dereference, not a literal secret
+func isLikelyCodeReference(value string) bool {
+	v := strings.TrimSpace(value)
+	// process.env.SOMETHING
+	if strings.HasPrefix(v, "process.env.") {
+		return true
+	}
+	// config.something or settings.something
+	if strings.Contains(v, ".") && !strings.Contains(v, " ") && !strings.Contains(v, "/") && len(v) < 60 {
+		parts := strings.SplitN(v, ".", 2)
+		if len(parts) == 2 && len(parts[0]) > 0 && parts[0][0] >= 'a' && parts[0][0] <= 'z' {
+			return true
+		}
+	}
+	return false
+}
+
+// hasRepeatedChars returns true if >60% of chars are the same (e.g. "aaaaaaa...")
+func hasRepeatedChars(s string) bool {
+	if len(s) < 8 {
+		return false
+	}
+	counts := make(map[byte]int)
+	for i := 0; i < len(s); i++ {
+		counts[s[i]]++
+	}
+	for _, count := range counts {
+		if float64(count)/float64(len(s)) > 0.6 {
+			return true
+		}
+	}
+	return false
 }
 
 var (
@@ -79,6 +159,31 @@ var (
 	massAssignmentPattern      = regexp.MustCompile(`(?i)(?:\.update\s*\(\s*(?:req\.body|params)|\.create\s*\(\s*(?:req\.body|params)|\bspread\s*\(\s*(?:req\.|props))`)
 	jwtWeakAlgPattern          = regexp.MustCompile(`(?i)(?:algorithm\s*[:=]\s*['"](?:none|HS256)['"]|alg\s*[:=]\s*['"]none['"])`)
 	hardcodedJWTSecretPattern  = regexp.MustCompile(`(?i)(?:jwt\.sign|jwt\.verify)\s*\([^)]*['"](secret|password|key123|test|sample|example|changeme)['"]\s*\)`)
+
+	// Vendor filename patterns (pre-compiled for hot path)
+	vendorHexFilePattern     = regexp.MustCompile(`^[a-f0-9]{8,}\.js$`)
+	vendorHexDashFilePattern = regexp.MustCompile(`^[a-f0-9]+-[a-f0-9]+\.js$`)
+
+	// Phase 5: New heuristic detection patterns
+	corsOriginReflectPattern = regexp.MustCompile(`(?i)(?:Access-Control-Allow-Origin['"]?\s*[:=,]\s*(?:req\.headers\.origin|request\.headers\.origin|origin)|origin\s*:\s*(?:true|req\.headers\.origin))`)
+
+	// ReDoS detection: extract JS regex literals and new RegExp() calls
+	jsRegexLiteralPattern = regexp.MustCompile(`(?:^|[=(:,;!&|?+\-~^])\s*/([^/\n]{4,})/[gimsuy]*`)
+	newRegExpPattern      = regexp.MustCompile(`(?i)new\s+RegExp\s*\(\s*['"]([^'"\n]{4,})['"]`)
+	// Dangerous quantifier patterns that cause catastrophic backtracking
+	redosNestedQuantifier       = regexp.MustCompile(`\([^)]*[+*][^)]*\)[+*]`)                                                              // (a+)+ or (a*)*
+	redosOverlappingAlts        = regexp.MustCompile(`\((?:[^|)]+\|){2,}[^)]*\)[+*]`)                                                       // (a|b|c)+ with 3+ alts
+	redosQuantifiedOverlap      = regexp.MustCompile(`[.\\][*+].*[.\\][*+].*[.\\][*+]`)                                                     // .*.*.*  triple greedy
+	redosNestedRepetition       = regexp.MustCompile(`\([^)]*\{\d+,?\d*\}[^)]*\)[+*{]`)                                                     // (a{1,})+
+	redosStarStar               = regexp.MustCompile(`(?:\.[*+]|\[[^\]]+\][*+]|\\[wdsSbB][*+])\s*(?:\.[*+]|\[[^\]]+\][*+]|\\[wdsSbB][*+])`) // .*.+ patterns
+	insecureCookiePattern       = regexp.MustCompile(`(?i)(?:set-cookie|res\.cookie|response\.cookie|cookie\s*[:=])`)
+	secureCookieFlagPattern     = regexp.MustCompile(`(?i)(?:secure\s*:\s*true|httpOnly\s*:\s*true|__Host-|__Secure-)`)
+	debugModePattern            = regexp.MustCompile(`(?i)(?:debug\s*[:=]\s*true|NODE_ENV\s*[:=!]=?\s*['"]development['"]|app\.debug\s*=\s*True|DEBUG\s*=\s*['"]?(?:True|1|yes)['"]?)`)
+	graphqlIntrospectionPattern = regexp.MustCompile(`(?i)(?:introspection\s*:\s*true|__schema\s*{|IntrospectionQuery)`)
+	exposedSourceMapPattern     = regexp.MustCompile(`(?i)(?://[#@]\s*sourceMappingURL\s*=|\.map['"]?\s*$)`)
+	nosqlInjectionPattern       = regexp.MustCompile(`(?i)(?:\$(?:gt|gte|lt|lte|ne|in|nin|regex|where|exists)\b|\bfind(?:One)?\s*\(\s*\{[^}]*(?:req\.|request\.|params|body|query))`)
+	exposedStackTracePattern    = regexp.MustCompile(`(?i)(?:res\.(?:send|json)\s*\(\s*(?:err|error)\.stack|stack\s*:\s*(?:err|error)\.stack|stackTrace\s*[:=])`)
+	npmConfigLeakPattern        = regexp.MustCompile(`(?i)(?:_auth\s*=\s*[A-Za-z0-9+/=]{10,}|_authToken\s*=\s*[A-Za-z0-9._-]{10,}|//registry\.npmjs\.org/:_authToken)`)
 )
 
 func scanContent(target, content string) []Result {
@@ -91,6 +196,51 @@ func scanContent(target, content string) []Result {
 	collectHeuristicFindings(target, content, collector.add)
 
 	return collector.results
+}
+
+// isLikelyTestOrMockFile returns true if the filename suggests test data, mocks, fixtures or examples
+func isLikelyTestOrMockFile(target string) bool {
+	lower := strings.ToLower(filepath.Base(target))
+	markers := []string{
+		".test.", ".spec.", "_test.", "_spec.",
+		".mock.", "_mock.", ".fixture", "_fixture",
+		".example.", "_example.", ".sample.", "_sample.",
+		".fake.", "_fake.", ".stub.", "_stub.",
+		"__tests__", "__mocks__", "__fixtures__",
+	}
+	for _, m := range markers {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
+	// Also check path components
+	lowerPath := strings.ToLower(strings.ReplaceAll(target, "\\", "/"))
+	pathMarkers := []string{
+		"/test/", "/tests/", "/spec/", "/specs/",
+		"/__tests__/", "/__mocks__/", "/__fixtures__/",
+		"/fixtures/", "/mocks/", "/examples/", "/samples/",
+		"/testdata/", "/test-data/",
+	}
+	for _, pm := range pathMarkers {
+		if strings.Contains(lowerPath, pm) {
+			return true
+		}
+	}
+	return false
+}
+
+// suppressedOnTestFiles lists signature names that are commonly false positives in test/mock files
+var suppressedOnTestFiles = map[string]bool{
+	"API Key in Variable":        true,
+	"Secret in Variable":         true,
+	"API Key Generic Detector":   true,
+	"Base64 High Entropy String": true,
+	"Session ID":                 true,
+	"CSRF Token":                 true,
+	"Bearer Token Generic":       true,
+	"Basic Auth String":          true,
+	"OAuth Client Secret":        true,
+	"OAuth Client ID":            true,
 }
 
 func (c *resultCollector) add(name, priority, match string) {
@@ -115,9 +265,26 @@ func (c *resultCollector) add(name, priority, match string) {
 
 func collectSignatureFindings(target, content string, add func(name, priority, match string)) {
 	vendorTarget := isLikelyVendorTarget(target)
+	testTarget := isLikelyTestOrMockFile(target)
+	isMinified := strings.Count(content, "\n") < 8 && len(content) > 6000
 
 	for _, sig := range Signatures {
-		if vendorTarget && (sig.Name == "Base64 High Entropy String" || sig.Name == "Localhost Reference" || sig.Name == "Private IP (Internal)" || sig.Name == "Dev/Stage URL" || sig.Name == "Basic Auth String" || sig.Name == "OAuth Client Secret" || sig.Name == "OAuth Client ID" || sig.Name == "Helm Secret Value") {
+		if vendorTarget && (sig.Name == "Base64 High Entropy String" || sig.Name == "Localhost Reference" || sig.Name == "Private IP (Internal)" || sig.Name == "Dev/Stage URL" || sig.Name == "Basic Auth String" || sig.Name == "OAuth Client Secret" || sig.Name == "OAuth Client ID" || sig.Name == "Helm Secret Value" || sig.Name == "API Key Generic Detector" || sig.Name == "Secret in Variable" || sig.Name == "API Key in Variable" || sig.Name == "Session ID" || sig.Name == "CSRF Token") {
+			continue
+		}
+
+		// Suppress noise-prone generic signatures in test/mock files
+		if testTarget && suppressedOnTestFiles[sig.Name] {
+			continue
+		}
+
+		// Fast pre-filter: skip regex if required prefix is absent
+		if sig.Prefix != "" && !strings.Contains(content, sig.Prefix) {
+			continue
+		}
+
+		// Skip noise-prone sigs on minified content
+		if isMinified && skipOnMinified[sig.Name] {
 			continue
 		}
 
@@ -129,6 +296,11 @@ func collectSignatureFindings(target, content string, add func(name, priority, m
 				continue
 			}
 
+			// Skip repeated-character strings (e.g. "aaaaaaa...")
+			if hasRepeatedChars(normalizedMatch) {
+				continue
+			}
+
 			if sig.Name == "Base64 High Entropy String" && isHexString(normalizedMatch) {
 				continue
 			}
@@ -137,9 +309,14 @@ func collectSignatureFindings(target, content string, add func(name, priority, m
 				continue
 			}
 
+			// Skip values that look like variable references, not literal secrets
+			if isLikelyCodeReference(match) {
+				continue
+			}
+
 			// For patterns prone to false positives, require minimum entropy
-			if lowEntropyPatterns[sig.Name] {
-				if shannonEntropy(match) < 3.5 {
+			if minEntropy, ok := lowEntropyPatterns[sig.Name]; ok {
+				if shannonEntropy(match) < minEntropy {
 					continue
 				}
 			}
@@ -163,6 +340,10 @@ func collectHeuristicFindings(target, content string, add func(name, priority, m
 
 	if corsWildcardPattern.MatchString(codeOnly) || manualCorsPattern.MatchString(codeOnly) {
 		add("CORS Wildcard With Credentials", "HIGH", "origin: '*' with credentials: true")
+	}
+
+	if corsOriginReflectPattern.MatchString(codeOnly) {
+		add("CORS Origin Reflection (Dynamic)", "HIGH", "Origin header reflected without validation")
 	}
 
 	for _, line := range lines {
@@ -252,6 +433,39 @@ func collectHeuristicFindings(target, content string, add func(name, priority, m
 		if hardcodedJWTSecretPattern.MatchString(text) {
 			add("Hardcoded JWT Secret", "CRITICAL", formatLineEvidence(line.Number, text))
 		}
+
+		// ── Phase 5: New heuristic detections ──
+
+		if insecureCookiePattern.MatchString(text) && !secureCookieFlagPattern.MatchString(text) {
+			add("Insecure Cookie (Missing Secure/HttpOnly)", "MEDIUM", formatLineEvidence(line.Number, text))
+		}
+
+		if debugModePattern.MatchString(text) {
+			add("Debug Mode Enabled In Production Code", "MEDIUM", formatLineEvidence(line.Number, text))
+		}
+
+		if graphqlIntrospectionPattern.MatchString(text) {
+			add("GraphQL Introspection Enabled", "MEDIUM", formatLineEvidence(line.Number, text))
+		}
+
+		if exposedSourceMapPattern.MatchString(text) {
+			add("Exposed Source Map Reference", "LOW", formatLineEvidence(line.Number, text))
+		}
+
+		if nosqlInjectionPattern.MatchString(text) && taintSourcePattern.MatchString(text) {
+			add("Potential NoSQL Injection", "HIGH", formatLineEvidence(line.Number, text))
+		}
+
+		if exposedStackTracePattern.MatchString(text) {
+			add("Exposed Stack Trace to Client", "MEDIUM", formatLineEvidence(line.Number, text))
+		}
+
+		if npmConfigLeakPattern.MatchString(text) {
+			add("NPM Config Leak (_auth / _authToken)", "HIGH", formatLineEvidence(line.Number, text))
+		}
+
+		// ReDoS: check JS regex literals and new RegExp() on this line
+		checkReDoS(line.Number, text, add)
 
 		if sqlExecutionPattern.MatchString(text) && sqlKeywordPattern.MatchString(text) && dynamicDataPattern.MatchString(text) {
 			add("Potential SQL Injection", "HIGH", formatLineEvidence(line.Number, text))
@@ -464,6 +678,20 @@ func looksCredentialLike(identifier, value string) bool {
 		return false
 	}
 
+	// Skip properly hashed passwords (bcrypt, argon2, scrypt) — these are safe
+	if strings.HasPrefix(value, "$2a$") || strings.HasPrefix(value, "$2b$") || strings.HasPrefix(value, "$2y$") ||
+		strings.HasPrefix(value, "$argon2id$") || strings.HasPrefix(value, "$argon2i$") || strings.HasPrefix(value, "$scrypt$") {
+		return false
+	}
+
+	// Skip file paths and CSS/HTML class selectors
+	if strings.HasPrefix(value, "/") || strings.HasPrefix(value, "./") || strings.HasPrefix(value, "../") {
+		return false
+	}
+	if strings.HasPrefix(value, ".") && !strings.ContainsAny(value, " =:") {
+		return false // CSS class names like ".btn-primary-outlined"
+	}
+
 	if strings.Contains(identifier, "password") || strings.Contains(identifier, "passwd") {
 		return len(value) >= 6
 	}
@@ -493,24 +721,86 @@ func looksLikePlaceholder(value string) bool {
 	placeholders := []string{
 		"changeme",
 		"change-me",
+		"change_me",
 		"replace-me",
+		"replace_me",
 		"replace_this",
+		"replaceme",
 		"your_token_here",
 		"your_secret_here",
+		"your_key_here",
+		"your_api_key",
+		"your-api-key",
+		"your-api-key-here",
+		"your-secret",
+		"your-token",
+		"insert_token_here",
+		"insert_key_here",
+		"enter_your_key",
+		"put_your_key_here",
 		"example",
 		"example123",
+		"example_key",
+		"example_secret",
+		"example_token",
+		"sample",
+		"sample_key",
+		"sample_secret",
 		"dummy",
+		"dummykey",
+		"dummysecret",
 		"placeholder",
+		"foo",
+		"bar",
+		"baz",
+		"foobar",
+		"test",
+		"testing",
+		"test123",
+		"testkey",
+		"testsecret",
+		"testtoken",
+		"test_key",
+		"test_secret",
+		"test_token",
 		"null",
 		"undefined",
+		"none",
+		"empty",
+		"n/a",
+		"todo",
+		"fixme",
+		"xxx",
 		"token_here",
 		"secret_here",
+		"key_here",
+		"password_here",
+		"default",
+		"default_key",
+		"default_secret",
+		"my-secret",
+		"my-token",
+		"my-key",
+		"mysecret",
+		"mytoken",
+		"mykey",
 	}
 
 	for _, placeholder := range placeholders {
 		if lower == placeholder {
 			return true
 		}
+	}
+
+	// Patterns like <YOUR_KEY>, ${TOKEN}, {{SECRET}}
+	if strings.HasPrefix(lower, "<") && strings.HasSuffix(lower, ">") {
+		return true
+	}
+	if strings.HasPrefix(lower, "${") && strings.HasSuffix(lower, "}") {
+		return true
+	}
+	if strings.HasPrefix(lower, "{{") && strings.HasSuffix(lower, "}}") {
+		return true
 	}
 
 	return false
@@ -710,11 +1000,11 @@ func isLikelyVendorTarget(target string) bool {
 		}
 	}
 
-	if regexp.MustCompile(`^[a-f0-9]{8,}\.js$`).MatchString(base) || regexp.MustCompile(`^[a-f0-9]{8,}\.js$`).MatchString(unixBase) {
+	if vendorHexFilePattern.MatchString(base) || vendorHexFilePattern.MatchString(unixBase) {
 		return true
 	}
 
-	if regexp.MustCompile(`^[a-f0-9-]{20,}\.js$`).MatchString(base) || regexp.MustCompile(`^[a-f0-9-]{20,}\.js$`).MatchString(unixBase) {
+	if vendorHexDashFilePattern.MatchString(base) || vendorHexDashFilePattern.MatchString(unixBase) {
 		return true
 	}
 
@@ -778,6 +1068,52 @@ func isLikelyBase64Noise(value string) bool {
 		return true
 	}
 
+	return false
+}
+
+// checkReDoS extracts regex patterns from a JS line and flags those vulnerable to catastrophic backtracking
+func checkReDoS(lineNumber int, text string, add func(name, priority, match string)) {
+	var regexBodies []string
+
+	// Extract /pattern/flags literals
+	for _, m := range jsRegexLiteralPattern.FindAllStringSubmatch(text, 5) {
+		if len(m) > 1 {
+			regexBodies = append(regexBodies, m[1])
+		}
+	}
+
+	// Extract new RegExp("pattern") calls
+	for _, m := range newRegExpPattern.FindAllStringSubmatch(text, 5) {
+		if len(m) > 1 {
+			regexBodies = append(regexBodies, m[1])
+		}
+	}
+
+	for _, body := range regexBodies {
+		if isVulnerableRegex(body) {
+			add("Potential ReDoS (Catastrophic Backtracking)", "MEDIUM", formatLineEvidence(lineNumber, text))
+			return // one finding per line is enough
+		}
+	}
+}
+
+// isVulnerableRegex checks a regex body string for patterns known to cause catastrophic backtracking
+func isVulnerableRegex(pattern string) bool {
+	if redosNestedQuantifier.MatchString(pattern) {
+		return true
+	}
+	if redosOverlappingAlts.MatchString(pattern) {
+		return true
+	}
+	if redosQuantifiedOverlap.MatchString(pattern) {
+		return true
+	}
+	if redosNestedRepetition.MatchString(pattern) {
+		return true
+	}
+	if redosStarStar.MatchString(pattern) {
+		return true
+	}
 	return false
 }
 
