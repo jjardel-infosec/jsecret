@@ -1,3 +1,9 @@
-*.exe.gocache/.gotmp/
+*.exe
+.gocache/
+.gotmp/
 jsecret.exe
-*.go
+jsecret-*
+coverage
+coverage.out
+analysis_test.go
+jjsecret_test.go

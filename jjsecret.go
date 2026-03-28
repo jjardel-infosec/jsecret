@@ -7,7 +7,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -35,33 +39,104 @@ func loadIgnorePatterns(root string) []string {
 	return patterns
 }
 
+func normalizeIgnoreValue(value string) string {
+	normalized := filepath.ToSlash(strings.TrimSpace(value))
+	normalized = strings.TrimPrefix(normalized, "./")
+	return strings.TrimPrefix(normalized, "/")
+}
+
+func matchIgnoreSegments(patternSegments, pathSegments []string, requireFullMatch bool) bool {
+	if len(patternSegments) == 0 {
+		return !requireFullMatch || len(pathSegments) == 0
+	}
+
+	if patternSegments[0] == "**" {
+		for offset := 0; offset <= len(pathSegments); offset++ {
+			if matchIgnoreSegments(patternSegments[1:], pathSegments[offset:], requireFullMatch) {
+				return true
+			}
+		}
+		return false
+	}
+
+	if len(pathSegments) == 0 {
+		return false
+	}
+
+	matched, err := path.Match(patternSegments[0], pathSegments[0])
+	if err != nil || !matched {
+		return false
+	}
+
+	return matchIgnoreSegments(patternSegments[1:], pathSegments[1:], requireFullMatch)
+}
+
+func matchesIgnorePattern(relPath string, isDir bool, pattern string) bool {
+	pattern = filepath.ToSlash(strings.TrimSpace(pattern))
+	if pattern == "" || strings.HasPrefix(pattern, "#") {
+		return false
+	}
+
+	rootAnchored := strings.HasPrefix(pattern, "/")
+	directoryPattern := strings.HasSuffix(pattern, "/")
+	pattern = normalizeIgnoreValue(strings.TrimSuffix(pattern, "/"))
+	if pattern == "" {
+		return false
+	}
+
+	pathValue := normalizeIgnoreValue(strings.TrimSuffix(relPath, "/"))
+	if pathValue == "" {
+		return false
+	}
+
+	pathSegments := strings.Split(pathValue, "/")
+	if !strings.Contains(pattern, "/") {
+		if rootAnchored {
+			matched, err := path.Match(pattern, pathSegments[0])
+			if err != nil || !matched {
+				return false
+			}
+			if directoryPattern {
+				return true
+			}
+			return len(pathSegments) == 1
+		}
+
+		if directoryPattern {
+			for _, segment := range pathSegments {
+				matched, err := path.Match(pattern, segment)
+				if err == nil && matched {
+					return true
+				}
+			}
+			return false
+		}
+
+		matched, err := path.Match(pattern, path.Base(pathValue))
+		return err == nil && matched
+	}
+
+	patternSegments := strings.Split(pattern, "/")
+	requireFullMatch := !directoryPattern
+	if rootAnchored {
+		return matchIgnoreSegments(patternSegments, pathSegments, requireFullMatch)
+	}
+
+	for start := 0; start < len(pathSegments); start++ {
+		if matchIgnoreSegments(patternSegments, pathSegments[start:], requireFullMatch) {
+			return true
+		}
+	}
+
+	return isDir && directoryPattern && matchIgnoreSegments(patternSegments, pathSegments, false)
+}
+
 // shouldIgnore returns true if relPath matches any of the ignore patterns.
 func shouldIgnore(relPath string, patterns []string) bool {
-	// Normalise to forward slashes for consistent matching
-	norm := filepath.ToSlash(relPath)
-	for _, pat := range patterns {
-		pat = filepath.ToSlash(pat)
-		// Match against the full relative path
-		if matched, _ := filepath.Match(pat, norm); matched {
+	isDir := strings.HasSuffix(filepath.ToSlash(relPath), "/")
+	for _, pattern := range patterns {
+		if matchesIgnorePattern(relPath, isDir, pattern) {
 			return true
-		}
-		// Match against the basename only
-		if matched, _ := filepath.Match(pat, filepath.Base(norm)); matched {
-			return true
-		}
-		// Support directory prefix patterns like "test/" → skip anything under test/
-		if strings.HasSuffix(pat, "/") && strings.HasPrefix(norm, pat) {
-			return true
-		}
-		// Support **/ prefix for recursive patterns (simplified)
-		if strings.HasPrefix(pat, "**/") {
-			rest := pat[3:]
-			if matched, _ := filepath.Match(rest, filepath.Base(norm)); matched {
-				return true
-			}
-			if strings.Contains(norm, "/"+rest) || strings.HasSuffix(norm, rest) {
-				return true
-			}
 		}
 	}
 	return false
@@ -83,6 +158,177 @@ var (
 	}
 )
 
+type ScanStats struct {
+	SignatureCount  int
+	HeuristicCount  int
+	UniqueTypeCount int
+}
+
+type ScanCounters struct {
+	FilesScanned int64
+	Critical     int64
+	High         int64
+	Medium       int64
+	Low          int64
+	Total        int64
+}
+
+type SeverityBreakdown struct {
+	Critical int
+	High     int
+	Medium   int
+	Low      int
+}
+
+type MarkdownTargetGroup struct {
+	Target  string
+	Results []Result
+}
+
+type MarkdownSeverityGroup struct {
+	Severity string
+	Icon     string
+	Results  []Result
+	Targets  []MarkdownTargetGroup
+}
+
+func snapshotScanCounters(filesScanned, critical, high, medium, low *int64) ScanCounters {
+	snapshot := ScanCounters{
+		FilesScanned: atomic.LoadInt64(filesScanned),
+		Critical:     atomic.LoadInt64(critical),
+		High:         atomic.LoadInt64(high),
+		Medium:       atomic.LoadInt64(medium),
+		Low:          atomic.LoadInt64(low),
+	}
+	snapshot.Total = snapshot.Critical + snapshot.High + snapshot.Medium + snapshot.Low
+	return snapshot
+}
+
+func countResultsBySeverity(results []Result) SeverityBreakdown {
+	breakdown := SeverityBreakdown{}
+	for _, result := range results {
+		switch result.Priority {
+		case "CRITICAL":
+			breakdown.Critical++
+		case "HIGH":
+			breakdown.High++
+		case "MEDIUM":
+			breakdown.Medium++
+		case "LOW":
+			breakdown.Low++
+		}
+	}
+	return breakdown
+}
+
+func markdownSeverityIcon(severity string) string {
+	switch severity {
+	case "CRITICAL":
+		return "🔴"
+	case "HIGH":
+		return "🟠"
+	case "MEDIUM":
+		return "🟡"
+	case "LOW":
+		return "🔵"
+	default:
+		return "ℹ️"
+	}
+}
+
+func groupMarkdownResults(results []Result) []MarkdownSeverityGroup {
+	sorted := sortedResultsCopy(results)
+	var groups []MarkdownSeverityGroup
+
+	for _, severity := range []string{"CRITICAL", "HIGH", "MEDIUM", "LOW"} {
+		group := MarkdownSeverityGroup{
+			Severity: severity,
+			Icon:     markdownSeverityIcon(severity),
+		}
+
+		for _, result := range sorted {
+			if result.Priority != severity {
+				continue
+			}
+			group.Results = append(group.Results, result)
+			if len(group.Targets) == 0 || group.Targets[len(group.Targets)-1].Target != result.Target {
+				group.Targets = append(group.Targets, MarkdownTargetGroup{Target: result.Target})
+			}
+			lastIndex := len(group.Targets) - 1
+			group.Targets[lastIndex].Results = append(group.Targets[lastIndex].Results, result)
+		}
+
+		if len(group.Results) > 0 {
+			groups = append(groups, group)
+		}
+	}
+
+	return groups
+}
+
+func renderScanSummary(filesScanned, total, critical, high, medium, low int64, stats ScanStats, elapsed time.Duration) string {
+	var sb strings.Builder
+	sb.WriteString("\n\033[1;37m─── Scan Summary ───\033[0m\n")
+	sb.WriteString(fmt.Sprintf("  Files scanned : %d\n", filesScanned))
+	sb.WriteString(fmt.Sprintf("  Total findings: %d (%d signature, %d heuristic)\n", total, stats.SignatureCount, stats.HeuristicCount))
+	sb.WriteString(fmt.Sprintf("  Unique types  : %d\n", stats.UniqueTypeCount))
+	sb.WriteString(fmt.Sprintf("    \033[1;31mCRITICAL\033[0m: %d\n", critical))
+	sb.WriteString(fmt.Sprintf("    \033[31mHIGH\033[0m    : %d\n", high))
+	sb.WriteString(fmt.Sprintf("    \033[33mMEDIUM\033[0m  : %d\n", medium))
+	sb.WriteString(fmt.Sprintf("    \033[34mLOW\033[0m     : %d\n", low))
+	sb.WriteString(fmt.Sprintf("  Elapsed       : %s\n", elapsed.Round(time.Millisecond)))
+	return sb.String()
+}
+
+func shouldExitStrict(critical, high int64) bool {
+	return critical > 0 || high > 0
+}
+
+func resultCategory(result Result) string {
+	if strings.HasPrefix(result.Match, "line ") {
+		return "heuristic"
+	}
+	return "signature"
+}
+
+func sortResults(results []Result) {
+	sort.Slice(results, func(i, j int) bool {
+		pi := priorityLevels[results[i].Priority]
+		pj := priorityLevels[results[j].Priority]
+		if pi != pj {
+			return pi > pj
+		}
+		if results[i].Target != results[j].Target {
+			return results[i].Target < results[j].Target
+		}
+		if results[i].Name != results[j].Name {
+			return results[i].Name < results[j].Name
+		}
+		return results[i].Match < results[j].Match
+	})
+}
+
+func sortedResultsCopy(results []Result) []Result {
+	cloned := append([]Result(nil), results...)
+	sortResults(cloned)
+	return cloned
+}
+
+func summarizeResults(results []Result) ScanStats {
+	stats := ScanStats{}
+	uniqueTypes := make(map[string]struct{})
+	for _, result := range results {
+		uniqueTypes[result.Name] = struct{}{}
+		if resultCategory(result) == "heuristic" {
+			stats.HeuristicCount++
+		} else {
+			stats.SignatureCount++
+		}
+	}
+	stats.UniqueTypeCount = len(uniqueTypes)
+	return stats
+}
+
 // JSONResult is the structured output for -json flag
 type JSONResult struct {
 	Target   string `json:"target"`
@@ -90,6 +336,7 @@ type JSONResult struct {
 	Finding  string `json:"finding"`
 	Evidence string `json:"evidence"`
 	Category string `json:"category"`
+	Line     int    `json:"line,omitempty"`
 }
 
 // SARIFLog is the top-level SARIF v2.1.0 structure
@@ -152,11 +399,17 @@ type SARIFLocation struct {
 // SARIFPhysicalLocation is the physical file location
 type SARIFPhysicalLocation struct {
 	ArtifactLocation SARIFArtifactLocation `json:"artifactLocation"`
+	Region           *SARIFRegion          `json:"region,omitempty"`
 }
 
 // SARIFArtifactLocation represents a file URI
 type SARIFArtifactLocation struct {
 	URI string `json:"uri"`
+}
+
+// SARIFRegion represents a line/column range in a file
+type SARIFRegion struct {
+	StartLine int `json:"startLine"`
 }
 
 func main() {
@@ -175,6 +428,7 @@ func main() {
 	var helpFlag bool
 	var silentFlag bool
 	var strictFlag bool
+	var insecureTLSFlag bool
 
 	flag.StringVar(&urlFlag, "u", "", "Single URL to scan")
 	flag.StringVar(&fileFlag, "f", "", "File containing list of URLs")
@@ -188,8 +442,11 @@ func main() {
 	flag.StringVar(&extFlag, "ext", "", "Custom file extensions for directory scan (comma-separated, e.g., .js,.ts,.jsx)")
 	flag.IntVar(&concurrency, "t", 50, "Number of concurrent threads")
 	flag.BoolVar(&helpFlag, "h", false, "Show help message")
-	flag.BoolVar(&silentFlag, "s", false, "Silent mode (no banner/summary)")
+	flag.BoolVar(&silentFlag, "s", false, "Silent mode (no banner, summary, or fetch warnings)")
+	var mdFlag string
+	flag.StringVar(&mdFlag, "md", "", "Output file to save results (Markdown bug bounty report)")
 	flag.BoolVar(&strictFlag, "strict", false, "Exit with code 1 if CRITICAL or HIGH findings are found")
+	flag.BoolVar(&insecureTLSFlag, "k", false, "Skip TLS certificate verification for HTTPS requests")
 
 	// Custom usage message
 	flag.Usage = func() {
@@ -200,6 +457,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  jsecret -u http://example.com/script.js\n")
 		fmt.Fprintf(os.Stderr, "  jsecret -f urls.txt -t 100 -o results.txt -csv report.csv\n")
 		fmt.Fprintf(os.Stderr, "  jsecret -d /path/to/project -json findings.json\n")
+		fmt.Fprintf(os.Stderr, "  jsecret -d . -md report.md\n")
 		fmt.Fprintf(os.Stderr, "  jsecret -d . -min HIGH -strict\n")
 		fmt.Fprintf(os.Stderr, "  jsecret -f urls.txt -sarif report.sarif\n")
 		fmt.Fprintf(os.Stderr, "  jsecret -d . -ext .js,.ts,.jsx,.vue\n")
@@ -217,6 +475,16 @@ func main() {
 
 	if !silentFlag {
 		printBanner()
+	}
+	configureDiagnostics(!silentFlag)
+
+	if concurrency < 1 {
+		fmt.Fprintf(os.Stderr, "Invalid -t value: %d (use a value >= 1)\n", concurrency)
+		os.Exit(1)
+	}
+
+	if insecureTLSFlag {
+		configureTLSVerification(true)
 	}
 
 	// Configure proxy
@@ -337,8 +605,8 @@ func main() {
 				atomic.AddInt64(&lowCount, 1)
 			}
 
-			// Collect for JSON/SARIF
-			if jsonFlag != "" || sarifFlag != "" {
+			// Collect for JSON/SARIF/Markdown
+			if jsonFlag != "" || sarifFlag != "" || mdFlag != "" {
 				resultsMu.Lock()
 				allResults = append(allResults, res)
 				resultsMu.Unlock()
@@ -416,10 +684,10 @@ func main() {
 				if relPath == "" {
 					relPath = fpath
 				}
-				// Skip hidden directories and node_modules
+				// Skip hidden directories, VCS metadata, and dependency trees.
 				if info.IsDir() {
 					base := filepath.Base(fpath)
-					if strings.HasPrefix(base, ".") || base == "node_modules" || base == "dist" || base == "build" || base == ".git" {
+					if strings.HasPrefix(base, ".") || base == "node_modules" || base == ".git" {
 						return filepath.SkipDir
 					}
 					// Check .jsecretignore for directory patterns
@@ -475,6 +743,9 @@ func main() {
 	close(results)
 	wgOutput.Wait()
 
+	// Sort collected results by severity (descending), then by target
+	sortResults(allResults)
+
 	// Write JSON output
 	if jsonFlag != "" {
 		writeJSONOutput(jsonFlag, allResults)
@@ -485,22 +756,21 @@ func main() {
 		writeSARIFOutput(sarifFlag, allResults)
 	}
 
+	// Write Markdown report
+	if mdFlag != "" {
+		writeMarkdownOutput(mdFlag, allResults)
+	}
+
 	// Print summary
 	elapsed := time.Since(startTime)
-	total := atomic.LoadInt64(&criticalCount) + atomic.LoadInt64(&highCount) + atomic.LoadInt64(&mediumCount) + atomic.LoadInt64(&lowCount)
+	counters := snapshotScanCounters(&filesScanned, &criticalCount, &highCount, &mediumCount, &lowCount)
 	if !silentFlag {
-		fmt.Printf("\n\033[1;37m─── Scan Summary ───\033[0m\n")
-		fmt.Printf("  Files scanned : %d\n", atomic.LoadInt64(&filesScanned))
-		fmt.Printf("  Total findings: %d\n", total)
-		fmt.Printf("    \033[1;31mCRITICAL\033[0m: %d\n", atomic.LoadInt64(&criticalCount))
-		fmt.Printf("    \033[31mHIGH\033[0m    : %d\n", atomic.LoadInt64(&highCount))
-		fmt.Printf("    \033[33mMEDIUM\033[0m  : %d\n", atomic.LoadInt64(&mediumCount))
-		fmt.Printf("    \033[34mLOW\033[0m     : %d\n", atomic.LoadInt64(&lowCount))
-		fmt.Printf("  Elapsed       : %s\n", elapsed.Round(time.Millisecond))
+		stats := summarizeResults(allResults)
+		fmt.Print(renderScanSummary(counters.FilesScanned, counters.Total, counters.Critical, counters.High, counters.Medium, counters.Low, stats, elapsed))
 	}
 
 	// Exit with code 1 if strict mode and critical/high findings
-	if strictFlag && (atomic.LoadInt64(&criticalCount) > 0 || atomic.LoadInt64(&highCount) > 0) {
+	if strictFlag && shouldExitStrict(counters.Critical, counters.High) {
 		os.Exit(1)
 	}
 }
@@ -516,13 +786,27 @@ func isScannable(name string, extensions []string) bool {
 	return false
 }
 
+// extractLineNumber parses "line N: ..." evidence strings and returns the line number (0 if none).
+var lineNumberRe = regexp.MustCompile(`^line (\d+):`)
+
+func extractLineNumber(evidence string) int {
+	m := lineNumberRe.FindStringSubmatch(evidence)
+	if m == nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(m[1])
+	return n
+}
+
 // writeJSONOutput writes results in structured JSON format
 func writeJSONOutput(path string, results []Result) {
+	results = sortedResultsCopy(results)
 	jsonResults := make([]JSONResult, 0, len(results))
 	for _, r := range results {
-		category := "signature"
-		if strings.HasPrefix(r.Match, "line ") {
-			category = "heuristic"
+		category := resultCategory(r)
+		lineNum := 0
+		if category == "heuristic" {
+			lineNum = extractLineNumber(r.Match)
 		}
 		jsonResults = append(jsonResults, JSONResult{
 			Target:   r.Target,
@@ -530,6 +814,7 @@ func writeJSONOutput(path string, results []Result) {
 			Finding:  r.Name,
 			Evidence: r.Match,
 			Category: category,
+			Line:     lineNum,
 		})
 	}
 
@@ -546,6 +831,7 @@ func writeJSONOutput(path string, results []Result) {
 
 // writeSARIFOutput writes results in SARIF v2.1.0 format
 func writeSARIFOutput(path string, results []Result) {
+	results = sortedResultsCopy(results)
 	ruleMap := make(map[string]int)
 	var rules []SARIFRule
 	var sarifResults []SARIFResult
@@ -568,11 +854,15 @@ func writeSARIFOutput(path string, results []Result) {
 			Message: SARIFMessage{Text: r.Match},
 		}
 		if r.Target != "" {
-			sr.Locations = []SARIFLocation{
-				{PhysicalLocation: SARIFPhysicalLocation{
+			loc := SARIFLocation{
+				PhysicalLocation: SARIFPhysicalLocation{
 					ArtifactLocation: SARIFArtifactLocation{URI: r.Target},
-				}},
+				},
 			}
+			if ln := extractLineNumber(r.Match); ln > 0 {
+				loc.PhysicalLocation.Region = &SARIFRegion{StartLine: ln}
+			}
+			sr.Locations = []SARIFLocation{loc}
 		}
 		sarifResults = append(sarifResults, sr)
 	}
@@ -585,7 +875,7 @@ func writeSARIFOutput(path string, results []Result) {
 				Tool: SARIFTool{
 					Driver: SARIFDriver{
 						Name:           "jsecret",
-						Version:        "3.1.0",
+						Version:        "3.3.0",
 						InformationURI: "https://github.com/jjardel-infosec/jsecret",
 						Rules:          rules,
 					},
@@ -621,6 +911,52 @@ func sanitizeRuleID(name string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(name, " ", "-"), "(", ""), ")", "")
 }
 
+// writeMarkdownOutput writes a bug-bounty-style markdown report grouped by severity.
+func writeMarkdownOutput(path string, results []Result) {
+	var sb strings.Builder
+	sb.WriteString("# jsecret Security Scan Report\n\n")
+	sb.WriteString(fmt.Sprintf("**Generated:** %s\n\n", time.Now().UTC().Format(time.RFC3339)))
+
+	counts := countResultsBySeverity(results)
+	groups := groupMarkdownResults(results)
+	sb.WriteString("## Summary\n\n")
+	sb.WriteString(fmt.Sprintf("| Severity | Count |\n|----------|-------|\n"))
+	for _, row := range []struct {
+		Severity string
+		Count    int
+	}{
+		{Severity: "CRITICAL", Count: counts.Critical},
+		{Severity: "HIGH", Count: counts.High},
+		{Severity: "MEDIUM", Count: counts.Medium},
+		{Severity: "LOW", Count: counts.Low},
+	} {
+		if row.Count > 0 {
+			sb.WriteString(fmt.Sprintf("| %s | %d |\n", row.Severity, row.Count))
+		}
+	}
+	sb.WriteString("\n")
+
+	for _, group := range groups {
+		sb.WriteString(fmt.Sprintf("## %s %s (%d)\n\n", group.Icon, group.Severity, len(group.Results)))
+		for _, targetGroup := range group.Targets {
+			sb.WriteString(fmt.Sprintf("### `%s`\n\n", targetGroup.Target))
+			for _, r := range targetGroup.Results {
+				ln := extractLineNumber(r.Match)
+				if ln > 0 {
+					sb.WriteString(fmt.Sprintf("- **%s** (line %d)\n", r.Name, ln))
+				} else {
+					sb.WriteString(fmt.Sprintf("- **%s**\n", r.Name))
+				}
+				sb.WriteString(fmt.Sprintf("  > `%s`\n\n", r.Match))
+			}
+		}
+	}
+
+	if err := os.WriteFile(path, []byte(sb.String()), 0600); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing Markdown output: %v\n", err)
+	}
+}
+
 func printBanner() {
 	fmt.Println(`
        _                         _ 
@@ -630,6 +966,6 @@ func printBanner() {
       | \__ \  __/ (__| | |  __/| |_ 
       | |___/\___|\___|_|  \___| \__|
      _/ |                            
-    |__/   v3.0 - @jjardel-infosec (Ultimate JS Security Scanner)
+    |__/   v3.3 - @jjardel-infosec (Ultimate JS Security Scanner)
 	`)
 }

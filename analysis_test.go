@@ -180,6 +180,13 @@ func findResult(results []Result, name string) *Result {
 	return nil
 }
 
+func assertFinding(t *testing.T, results []Result, name string) {
+	t.Helper()
+	if findResult(results, name) == nil {
+		t.Errorf("expected finding %q, got none", name)
+	}
+}
+
 // ── Signature Detection Tests ──
 
 func TestSignatureDetectsAWSAccessKeyID(t *testing.T) {
@@ -308,6 +315,33 @@ func TestFPSkipsKnownSafeHashes(t *testing.T) {
 	}
 }
 
+func TestFPSkipsKnownSafeQuotedBase64(t *testing.T) {
+	content := `const encoded = "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz0123456789+/=";`
+	results := scanContent("bundle.js", content)
+	if findResult(results, "Base64 High Entropy String") != nil {
+		t.Fatalf("should skip known safe quoted base64-like string, got %#v", results)
+	}
+}
+
+func TestFPSkipsPlaceholderSecretValues(t *testing.T) {
+	content := `const secret = "replace_me_in_production";`
+	results := scanContent("config.js", content)
+	if findResult(results, "Secret in Variable") != nil {
+		t.Fatalf("should skip placeholder secret value, got %#v", results)
+	}
+	if findResult(results, "API Key Generic Detector") != nil {
+		t.Fatalf("should skip placeholder generic secret value, got %#v", results)
+	}
+}
+
+func TestFPSkipsPlaceholderSessionID(t *testing.T) {
+	content := `const session_id = "sample_session_id_value";`
+	results := scanContent("config.js", content)
+	if findResult(results, "Session ID") != nil {
+		t.Fatalf("should skip placeholder session id value, got %#v", results)
+	}
+}
+
 // ── New Heuristic Tests ──
 
 func TestHeuristicDetectsHardcodedJWTSecret(t *testing.T) {
@@ -334,6 +368,14 @@ func TestHeuristicDetectsDebugMode(t *testing.T) {
 	}
 }
 
+func TestHeuristicSkipsDebugModeComparisons(t *testing.T) {
+	content := `if (NODE_ENV === "development") { console.log("dev only"); }`
+	results := scanContent("server.js", content)
+	if findResult(results, "Debug Mode Enabled In Production Code") != nil {
+		t.Fatalf("should not flag debug mode comparisons, got %#v", results)
+	}
+}
+
 func TestHeuristicDetectsExposedStackTrace(t *testing.T) {
 	content := `app.use((err, req, res, next) => { res.json(err.stack); });`
 	results := scanContent("errors.js", content)
@@ -355,6 +397,14 @@ func TestHeuristicDetectsGraphQLIntrospection(t *testing.T) {
 	results := scanContent("graphql.js", content)
 	if findResult(results, "GraphQL Introspection Enabled") == nil {
 		t.Fatalf("expected GraphQL Introspection finding, got %#v", results)
+	}
+}
+
+func TestHeuristicSkipsGraphQLIntrospectionQueryReferences(t *testing.T) {
+	content := `import { IntrospectionQuery } from "graphql"; const queryName = IntrospectionQuery;`
+	results := scanContent("graphql.js", content)
+	if findResult(results, "GraphQL Introspection Enabled") != nil {
+		t.Fatalf("should not flag GraphQL IntrospectionQuery references alone, got %#v", results)
 	}
 }
 
@@ -521,6 +571,22 @@ func TestSpecificSigsStillFireOnTestFiles(t *testing.T) {
 	}
 }
 
+func TestSuppressLegacySigsOnTestFiles(t *testing.T) {
+	content := `{"Authorization":"bearer abcdefghijklmnopqrstuvwxyz1234567890"}`
+	results := scanContent("fixtures/auth.mock.js", content)
+	if findResult(results, "JJARDEL (Legacy)") != nil {
+		t.Fatalf("expected JJARDEL legacy sig to be suppressed in test file, got %#v", results)
+	}
+}
+
+func TestSuppressLegacySigsOnEnvExample(t *testing.T) {
+	content := "AKIAABCDEFGHIJKLMNOP\nconst secret = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\";"
+	results := scanContent(".env.example", content)
+	if findResult(results, "SEGREDOS WAR (Legacy)") != nil {
+		t.Fatalf("expected SEGREDOS WAR legacy sig to be suppressed in env example, got %#v", results)
+	}
+}
+
 // ── Bcrypt/Argon2 Hash FP Suppression ──
 
 func TestFPSkipsBcryptHashedPasswords(t *testing.T) {
@@ -551,6 +617,448 @@ func TestFPSkipsFilePathValues(t *testing.T) {
 
 // ── Benchmark ──
 
+// ── Phase 2: False Positive Regression Tests ──
+
+func TestFPSkipsUUIDInGenericPatterns(t *testing.T) {
+	content := `const apiKey = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";`
+	results := scanContent("config.js", content)
+	if findResult(results, "API Key Generic Detector") != nil {
+		t.Fatalf("should skip UUID-like value in generic pattern, got %#v", results)
+	}
+}
+
+func TestFPSkipsPureNumericInGenericPatterns(t *testing.T) {
+	content := `const token = "12345678901234567890";`
+	results := scanContent("config.js", content)
+	if findResult(results, "API Key Generic Detector") != nil {
+		t.Fatalf("should skip pure numeric value in generic pattern, got %#v", results)
+	}
+}
+
+func TestFPSkipsEnvExampleFiles(t *testing.T) {
+	content := `const apiKey = "sk_test_abcdefghijklmnopqrstuvwx";`
+	results := scanContent(".env.example", content)
+	if findResult(results, "API Key Generic Detector") != nil {
+		t.Fatalf("should suppress generic sigs in .env.example, got %#v", results)
+	}
+}
+
+func TestFPSkipsImportMetaEnv(t *testing.T) {
+	content := `const key = import.meta.env.VITE_API_KEY;`
+	results := scanContent("config.js", content)
+	for _, r := range results {
+		if r.Name == "Potential Hardcoded Credential" && strings.Contains(r.Match, "import.meta.env") {
+			t.Fatalf("should skip import.meta.env references, got %#v", results)
+		}
+	}
+}
+
+func TestFPPasswordAssignmentSkipsCommonWords(t *testing.T) {
+	tests := []string{
+		`password: "disabled"`,
+		`password = "required"`,
+		`pwd: "optional"`,
+		`password: "undefined"`,
+	}
+	for _, tc := range tests {
+		results := scanContent("config.js", tc)
+		if findResult(results, "Password Assignment") != nil {
+			t.Fatalf("should skip common word in password assignment %q, got %#v", tc, results)
+		}
+	}
+}
+
+func TestPasswordAssignmentStillDetectsRealPasswords(t *testing.T) {
+	content := `const password = "SuperS3cr3t!Pass";`
+	results := scanContent("config.js", content)
+	if findResult(results, "Password Assignment") == nil {
+		t.Fatalf("expected Password Assignment finding for real password, got %#v", results)
+	}
+}
+
+func TestFPTinybirdNowRequiresContext(t *testing.T) {
+	// Bare "p.something" should NOT match without tinybird context
+	content := `const version = "p.abcdefghijklmnopqrstuvwxyz";`
+	results := scanContent("config.js", content)
+	if findResult(results, "Tinybird API Token") != nil {
+		t.Fatalf("should not flag bare p. string as Tinybird, got %#v", results)
+	}
+}
+
+func TestTinybirdDetectsWithContext(t *testing.T) {
+	content := `const TINYBIRD_TOKEN = "p.abcdefghijklmnopqrstuvwxyz";`
+	results := scanContent("config.js", content)
+	if findResult(results, "Tinybird API Token") == nil {
+		t.Fatalf("expected Tinybird finding with context, got %#v", results)
+	}
+}
+
+func TestFPResendRequiresLongerMatch(t *testing.T) {
+	// Short "re_" prefixed strings should not match
+	content := `const re_matchPattern = "something";`
+	results := scanContent("utils.js", content)
+	if findResult(results, "Resend API Key") != nil {
+		t.Fatalf("should not flag short re_ strings, got %#v", results)
+	}
+}
+
+func TestResendDetectsRealKey(t *testing.T) {
+	content := `const key = "re_` + strings.Repeat("aBcDeFgH", 4) + `x1";`
+	results := scanContent("email.js", content)
+	if findResult(results, "Resend API Key") == nil {
+		t.Fatalf("expected Resend API Key finding for real key, got %#v", results)
+	}
+}
+
+func TestFPVaultLegacyNowHasPrefix(t *testing.T) {
+	// A minified JS path like "module.s.abcdefghijklmnopqrstuvwx" should not match
+	content := `module.s.abcdefghijklmnopqrstuvwxyz1234`
+	results := scanContent("bundle.js", content)
+	if findResult(results, "Vault Token (Legacy)") != nil {
+		t.Fatalf("should not flag dotted access as Vault token, got %#v", results)
+	}
+}
+
+func TestSpecificSigsStillFireOnEnvExample(t *testing.T) {
+	// Real provider-specific tokens should still be detected in .env.example
+	content := `GITHUB_TOKEN=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef1234`
+	results := scanContent(".env.example", content)
+	if findResult(results, "GitHub Token") == nil {
+		t.Fatalf("expected GitHub Token to still fire in .env.example, got %#v", results)
+	}
+}
+
+func TestBearerTokenGenericSkipsPlaceholder(t *testing.T) {
+	content := `Authorization: Bearer token`
+	results := scanContent("headers.txt", content)
+	if findResult(results, "Bearer Token Generic") != nil {
+		t.Fatalf("should skip placeholder bearer token, got %#v", results)
+	}
+}
+
+func TestBearerTokenGenericDetectsLongToken(t *testing.T) {
+	content := `Authorization: Bearer abcdef1234567890qrstuvwxyzABCD`
+	results := scanContent("headers.txt", content)
+	assertFinding(t, results, "Bearer Token Generic")
+}
+
+func TestCookieNameGenericSkipsNonAuthCookie(t *testing.T) {
+	content := `Set-Cookie: theme=dark; Path=/; SameSite=Lax`
+	results := scanContent("headers.txt", content)
+	if findResult(results, "Cookie Name Generic") != nil {
+		t.Fatalf("should skip non-auth cookie names, got %#v", results)
+	}
+}
+
+func TestCookieNameGenericDetectsSessionCookie(t *testing.T) {
+	content := `Set-Cookie: sessionid=abc123xyz789; Path=/; HttpOnly`
+	results := scanContent("headers.txt", content)
+	assertFinding(t, results, "Cookie Name Generic")
+}
+
+func TestCSRFSkipsUnquotedReference(t *testing.T) {
+	content := `const csrfToken = csrfValueFromMeta`
+	results := scanContent("config.js", content)
+	if findResult(results, "CSRF Token") != nil {
+		t.Fatalf("should skip csrf variable reference, got %#v", results)
+	}
+}
+
+func TestCSRFDetectsQuotedLiteral(t *testing.T) {
+	content := `const csrfToken = "AbcDef123456Xyz"`
+	results := scanContent("config.js", content)
+	assertFinding(t, results, "CSRF Token")
+}
+
+// ── Phase 3: Bug Bounty Recon Detection Tests ──
+
+func TestSignatureDetectsCredentialsInURL(t *testing.T) {
+	content := `const db = "https://admin:s3cret@db.example.com:5432/mydb";`
+	results := scanContent("config.js", content)
+	if findResult(results, "Credentials in URL") == nil {
+		t.Fatalf("expected Credentials in URL finding, got %#v", results)
+	}
+}
+
+func TestSignatureDetectsAWSMetadataEndpoint(t *testing.T) {
+	content := `fetch("http://169.254.169.254/latest/meta-data/iam/security-credentials/");`
+	results := scanContent("ssrf.js", content)
+	if findResult(results, "Cloud Metadata Endpoint (AWS)") == nil {
+		t.Fatalf("expected Cloud Metadata Endpoint (AWS) finding, got %#v", results)
+	}
+}
+
+func TestSignatureDetectsGCPMetadataEndpoint(t *testing.T) {
+	content := `const url = "http://metadata.google.internal/computeMetadata/v1/project/project-id";`
+	results := scanContent("gcp.js", content)
+	if findResult(results, "Cloud Metadata Endpoint (GCP)") == nil {
+		t.Fatalf("expected Cloud Metadata Endpoint (GCP) finding, got %#v", results)
+	}
+}
+
+func TestSignatureDetectsS3BucketURL(t *testing.T) {
+	content := `const bucket = "https://my-bucket.s3.us-east-1.amazonaws.com/data.csv";`
+	results := scanContent("upload.js", content)
+	if findResult(results, "AWS S3 Bucket URL (HTTP)") == nil {
+		t.Fatalf("expected AWS S3 Bucket URL (HTTP) finding, got %#v", results)
+	}
+}
+
+func TestSignatureDetectsGCSBucketURL(t *testing.T) {
+	content := `const url = "https://storage.googleapis.com/my-public-bucket/file.zip";`
+	results := scanContent("storage.js", content)
+	if findResult(results, "GCS Bucket URL") == nil {
+		t.Fatalf("expected GCS Bucket URL finding, got %#v", results)
+	}
+}
+
+func TestSignatureDetectsAzureBlobURL(t *testing.T) {
+	content := `const blob = "https://myaccount.blob.core.windows.net/container/file";`
+	results := scanContent("azure.js", content)
+	if findResult(results, "Azure Blob Storage URL") == nil {
+		t.Fatalf("expected Azure Blob Storage URL finding, got %#v", results)
+	}
+}
+
+func TestSignatureDetectsExposedSwagger(t *testing.T) {
+	tests := []string{
+		`const docs = "/swagger-ui";`,
+		`fetch("/api-docs")`,
+		`const endpoint = "swagger.json";`,
+		`route("/graphiql")`,
+	}
+	for _, tc := range tests {
+		results := scanContent("routes.js", tc)
+		if findResult(results, "Exposed Swagger/OpenAPI") == nil {
+			t.Fatalf("expected Exposed Swagger/OpenAPI finding for %q, got %#v", tc, results)
+		}
+	}
+}
+
+func TestSignatureDetectsWebSocketWithToken(t *testing.T) {
+	content := `const ws = new WebSocket("wss://api.example.com/ws?token=eyJhbGciOiJIUzI1NiJ9");`
+	results := scanContent("realtime.js", content)
+	if findResult(results, "WebSocket URL with Token") == nil {
+		t.Fatalf("expected WebSocket URL with Token finding, got %#v", results)
+	}
+}
+
+func TestSignatureDetectsInternalEmail(t *testing.T) {
+	content := `const admin = "admin@internal.corp";`
+	results := scanContent("config.js", content)
+	if findResult(results, "Internal Email Address") == nil {
+		t.Fatalf("expected Internal Email Address finding, got %#v", results)
+	}
+}
+
+func TestSignatureDetectsInternalDebugPath(t *testing.T) {
+	tests := []string{
+		`fetch("/internal/config")`,
+		`app.get("/debug/pprof")`,
+		`route("/metrics")`,
+		`path: "/actuator/health"`,
+		`app.get("/admin/users")`,
+	}
+	for _, tc := range tests {
+		results := scanContent("routes.js", tc)
+		if findResult(results, "Internal/Debug Path") == nil {
+			t.Fatalf("expected Internal/Debug Path finding for %q, got %#v", tc, results)
+		}
+	}
+}
+
+func TestSignatureDetectsOIDCRedirectToLocalhost(t *testing.T) {
+	content := `redirect_uri = "http://localhost:3000/callback";`
+	results := scanContent("oauth.js", content)
+	if findResult(results, "Hardcoded OIDC/OAuth Redirect URI") == nil {
+		t.Fatalf("expected Hardcoded OIDC/OAuth Redirect URI finding, got %#v", results)
+	}
+}
+
+func TestSignatureDetectsCerebrasKey(t *testing.T) {
+	content := `const key = "csk-` + strings.Repeat("aBcDeFgH", 6) + `";`
+	results := scanContent("ai.js", content)
+	if findResult(results, "Cerebras API Key") == nil {
+		t.Fatalf("expected Cerebras API Key finding, got %#v", results)
+	}
+}
+
+func TestSignatureDetectsOpenRouterKey(t *testing.T) {
+	content := `const key = "sk-or-v1-` + strings.Repeat("ab12cd34", 8) + `";`
+	results := scanContent("ai.js", content)
+	if findResult(results, "OpenRouter API Key") == nil {
+		t.Fatalf("expected OpenRouter API Key finding, got %#v", results)
+	}
+}
+
+func TestSignatureDetectsLangchainKey(t *testing.T) {
+	content := `const key = "ls__` + strings.Repeat("ab12cd34", 4) + `";`
+	results := scanContent("langchain.js", content)
+	if findResult(results, "Langchain API Key") == nil {
+		t.Fatalf("expected Langchain API Key finding, got %#v", results)
+	}
+}
+
+func TestCredentialsInURLSkipsPlainHTTPS(t *testing.T) {
+	// Normal HTTPS URLs without credentials should not match
+	content := `const url = "https://api.example.com/v1/users";`
+	results := scanContent("api.js", content)
+	if findResult(results, "Credentials in URL") != nil {
+		t.Fatalf("should not flag plain URLs as credentials in URL, got %#v", results)
+	}
+}
+
+func TestInternalEmailSkipsPublicDomains(t *testing.T) {
+	content := `const email = "user@example.com";`
+	results := scanContent("contact.js", content)
+	if findResult(results, "Internal Email Address") != nil {
+		t.Fatalf("should not flag public domain emails, got %#v", results)
+	}
+}
+
+// ── Additional heuristic coverage tests ──
+
+func TestHeuristicDetectsInsecureCookie(t *testing.T) {
+	content := `res.cookie("session", token, { maxAge: 3600 });`
+	results := scanContent("auth.js", content)
+	if findResult(results, "Insecure Cookie (Missing Secure/HttpOnly)") == nil {
+		t.Fatalf("expected Insecure Cookie finding, got %#v", results)
+	}
+}
+
+func TestHeuristicSkipsSecureCookie(t *testing.T) {
+	content := `res.cookie("session", token, { httpOnly: true, secure: true });`
+	results := scanContent("auth.js", content)
+	if findResult(results, "Insecure Cookie (Missing Secure/HttpOnly)") != nil {
+		t.Fatalf("should skip secure cookie, got %#v", results)
+	}
+}
+
+func TestHeuristicDetectsNoSQLInjection(t *testing.T) {
+	content := `db.find({ $where: req.body.filter });`
+	results := scanContent("api.js", content)
+	if findResult(results, "Potential NoSQL Injection") == nil {
+		t.Fatalf("expected NoSQL Injection finding, got %#v", results)
+	}
+}
+
+func TestHeuristicDetectsWildcardPostMessage(t *testing.T) {
+	content := `window.postMessage(data, "*");`
+	results := scanContent("messaging.js", content)
+	if findResult(results, "Wildcard postMessage Target Origin") == nil {
+		t.Fatalf("expected postMessage finding, got %#v", results)
+	}
+}
+
+func TestHeuristicDetectsWeakCrypto(t *testing.T) {
+	content := `const hash = crypto.createHash("md5").update(data).digest("hex");`
+	results := scanContent("crypto.js", content)
+	if findResult(results, "Weak Cryptography") == nil {
+		t.Fatalf("expected Weak Crypto finding, got %#v", results)
+	}
+}
+
+func TestHeuristicDetectsTemplateInjection(t *testing.T) {
+	content := `const output = nunjucks.render(req.query.template);`
+	results := scanContent("views.js", content)
+	if findResult(results, "Potential Template Injection") == nil {
+		t.Fatalf("expected Template Injection finding, got %#v", results)
+	}
+}
+
+func TestHeuristicDetectsExposedSourceMap(t *testing.T) {
+	content := `//# sourceMappingURL=app.bundle.js.map`
+	results := scanContent("config.js", content)
+	if findResult(results, "Exposed Source Map Reference") == nil {
+		t.Fatalf("expected Source Map finding, got %#v", results)
+	}
+}
+
+func TestHeuristicSkipsGenericMapStringReferences(t *testing.T) {
+	content := `const mapFile = "app.bundle.js.map"`
+	results := scanContent("config.js", content)
+	if findResult(results, "Exposed Source Map Reference") != nil {
+		t.Fatalf("should not flag generic .map string references, got %#v", results)
+	}
+}
+
+func TestHeuristicDetectsMassAssignment(t *testing.T) {
+	content := `User.update(req.body);`
+	results := scanContent("users.js", content)
+	if findResult(results, "Potential Mass Assignment") == nil {
+		t.Fatalf("expected Mass Assignment finding, got %#v", results)
+	}
+}
+
+func TestVendorDetectionSkipsGenericSigs(t *testing.T) {
+	// Generic sigs like Base64 High Entropy should be suppressed on vendor paths
+	content := `const x = "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoxMjM0NTY3ODkw";`
+	results := scanContent("vendor/jquery.min.js", content)
+	if findResult(results, "Base64 High Entropy String") != nil {
+		t.Fatalf("should suppress generic sigs in vendor files, got %#v", results)
+	}
+}
+
+func TestSarifLevel(t *testing.T) {
+	tests := []struct {
+		priority string
+		expected string
+	}{
+		{"CRITICAL", "error"},
+		{"HIGH", "error"},
+		{"MEDIUM", "warning"},
+		{"LOW", "note"},
+		{"UNKNOWN", "note"},
+	}
+	for _, tt := range tests {
+		got := sarifLevel(tt.priority)
+		if got != tt.expected {
+			t.Errorf("sarifLevel(%q) = %q, want %q", tt.priority, got, tt.expected)
+		}
+	}
+}
+
+func TestSanitizeRuleID(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"Potential DOM XSS", "Potential-DOM-XSS"},
+		{"Insecure Cookie (Missing Secure/HttpOnly)", "Insecure-Cookie-Missing-Secure/HttpOnly"},
+		{"Simple", "Simple"},
+	}
+	for _, tt := range tests {
+		got := sanitizeRuleID(tt.input)
+		if got != tt.expected {
+			t.Errorf("sanitizeRuleID(%q) = %q, want %q", tt.input, got, tt.expected)
+		}
+	}
+}
+
+// ── extractLineNumber tests ──
+
+func TestExtractLineNumber(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int
+	}{
+		{"line 42: element.innerHTML = location.hash;", 42},
+		{"line 1: const x = 1;", 1},
+		{"line 999: foo", 999},
+		{"AKIA1234567890ABCDEF", 0},
+		{"mongodb+srv://admin:pass@host/db", 0},
+		{"", 0},
+	}
+	for _, tt := range tests {
+		got := extractLineNumber(tt.input)
+		if got != tt.expected {
+			t.Errorf("extractLineNumber(%q) = %d, want %d", tt.input, got, tt.expected)
+		}
+	}
+}
+
+// ── Benchmark ──
+
 func BenchmarkScanContent(b *testing.B) {
 	content := `
 const dbUrl = "mongodb+srv://admin:P@ssw0rd123@cluster0.abc.mongodb.net/prod";
@@ -566,5 +1074,182 @@ const config = { debug: true, introspection: true };
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		scanContent("sample.js", content)
+	}
+}
+
+// === Phase 7: New Signature Tests ===
+
+func TestSignatureLDAPConnectionString(t *testing.T) {
+	results := scanContent("config.js", `const ldapURL = "ldap://dc01.corp.local:389/DC=corp,DC=local";`)
+	assertFinding(t, results, "LDAP Connection String")
+}
+
+func TestSignatureAzureServiceBus(t *testing.T) {
+	results := scanContent("config.js", `const sbConn = "Endpoint=sb://mynamespace.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=abc123def456";`)
+	assertFinding(t, results, "Azure Service Bus Connection")
+}
+
+func TestSignatureAWSSQSQueueURL(t *testing.T) {
+	results := scanContent("config.js", `const queueUrl = "https://sqs.us-east-1.amazonaws.com/123456789012/my-queue";`)
+	assertFinding(t, results, "AWS SQS Queue URL")
+}
+
+func TestSignatureAWSSNSTopicARN(t *testing.T) {
+	results := scanContent("config.js", `const topic = "arn:aws:sns:us-east-1:123456789012:my-topic";`)
+	assertFinding(t, results, "AWS SNS Topic ARN")
+}
+
+func TestSignatureGraphQLEndpoint(t *testing.T) {
+	results := scanContent("routes.js", `const endpoint = "https://api.example.com/graphql";`)
+	assertFinding(t, results, "GraphQL Endpoint")
+}
+
+func TestSignatureSpringBootActuator(t *testing.T) {
+	results := scanContent("config.js", `const healthUrl = "/actuator/health";`)
+	assertFinding(t, results, "Spring Boot Actuator Endpoint")
+}
+
+func TestSignatureAdminPanelPath(t *testing.T) {
+	results := scanContent("routes.js", `router.get("/admin/dashboard", requireAuth, dashboardHandler);`)
+	assertFinding(t, results, "Admin Panel Path")
+}
+
+func TestSignatureWebhookSecret(t *testing.T) {
+	results := scanContent("config.js", `const webhookSecret = "whsec_abcdef1234567890abcdef1234567890";`)
+	assertFinding(t, results, "Webhook Secret Key")
+}
+
+func TestSignatureMapboxSecretToken(t *testing.T) {
+	results := scanContent("map.js", `mapboxgl.accessToken = "sk.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9_YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4";`)
+	assertFinding(t, results, "Mapbox Secret Token")
+}
+
+func TestSignatureTwilioAccountSID(t *testing.T) {
+	results := scanContent("sms.js", `const accountSid = "AC1234567890abcdef1234567890abcdef";`)
+	assertFinding(t, results, "Twilio Account SID")
+}
+
+func TestSignatureSendGridKey(t *testing.T) {
+	results := scanContent("mail.js", `const sgKey = "SG.aBcDeFgHiJkLmNoPqRsTuV.aBcDeFgHiJkLmNoPqRsTuVwXyZaBcDeFgHiJkLmNoPq";`)
+	assertFinding(t, results, "SendGrid API Key")
+}
+
+// === Phase 7: New Heuristic Tests ===
+
+func TestHeuristicDetectsDangerouslySetInnerHTML(t *testing.T) {
+	results := scanContent("app.jsx", `<div dangerouslySetInnerHTML = { {__html: userInput} } />`)
+	assertFinding(t, results, "React dangerouslySetInnerHTML Usage")
+}
+
+func TestHeuristicSkipsSanitizedDangerouslySetInnerHTML(t *testing.T) {
+	results := scanContent("app.jsx", `<div dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(userInput) }} />`)
+	if findResult(results, "React dangerouslySetInnerHTML Usage") != nil {
+		t.Fatalf("should not flag sanitized dangerouslySetInnerHTML usage, got %#v", results)
+	}
+	if findResult(results, "Potential DOM XSS") != nil || findResult(results, "HTML Injection Sink") != nil {
+		t.Fatalf("should not flag sanitized HTML sink usage, got %#v", results)
+	}
+}
+
+func TestHeuristicDetectsOverlyPermissiveCORS(t *testing.T) {
+	results := scanContent("server.js", `const allowedOrigins = [*.example.com, "https://*.test.local"]`)
+	assertFinding(t, results, "Overly Permissive CORS Origin")
+}
+
+func TestHeuristicSkipsExplicitLocalCORSOrigins(t *testing.T) {
+	results := scanContent("server.js", `const allowedOrigins = ["https://api.test.local", "http://localhost:3000"]`)
+	if findResult(results, "Overly Permissive CORS Origin") != nil {
+		t.Fatalf("should not flag explicit local/test origins without wildcard, got %#v", results)
+	}
+}
+
+func TestHeuristicDetectsUnsafeIframeSrc(t *testing.T) {
+	results := scanContent("widget.js", `iframe.src = req.query.url;`)
+	assertFinding(t, results, "Unsafe Iframe Source from User Input")
+}
+
+func TestHeuristicDetectsWebhookWithoutVerification(t *testing.T) {
+	results := scanContent("hooks.js", `const webhook = (req, res) => { processPayment(req.body); };`)
+	assertFinding(t, results, "Webhook Handler Without Signature Verification")
+}
+
+func TestHeuristicSkipsNonHandlerWebhookAssignments(t *testing.T) {
+	results := scanContent("hooks.js", `const callback = req.body.callbackUrl; const webhook = req.body.webhook;`)
+	if findResult(results, "Webhook Handler Without Signature Verification") != nil {
+		t.Fatalf("should not flag non-handler webhook assignments, got %#v", results)
+	}
+}
+
+func TestHeuristicSkipsWebhookWithHMAC(t *testing.T) {
+	code := `app.post("/webhook", (req, res) => { const sig = createHmac('sha256', secret).update(req.body).digest('hex'); });`
+	results := scanContent("hooks.js", code)
+	for _, r := range results {
+		if r.Name == "Webhook Handler Without Signature Verification" {
+			t.Error("should not flag webhook handler that uses HMAC verification")
+		}
+	}
+}
+
+func TestHeuristicDetectsErrorExposure(t *testing.T) {
+	results := scanContent("api.js", `app.get("/user", (req, res) => { db.find().catch(err => res.json(err.message)); });`)
+	assertFinding(t, results, "Error Details Exposed to Client")
+}
+
+func TestHeuristicSkipsGenericCatchResponses(t *testing.T) {
+	results := scanContent("api.js", `try { run(); } catch (err) { const message = "request failed"; res.json(message); }`)
+	if findResult(results, "Error Details Exposed to Client") != nil {
+		t.Fatalf("should not flag generic catch responses without error details, got %#v", results)
+	}
+}
+
+func TestHeuristicDetectsHeaderInjection(t *testing.T) {
+	results := scanContent("server.js", `res.setHeader("X-Custom", req.query.header);`)
+	assertFinding(t, results, "HTTP Header Injection from User Input")
+}
+
+func TestHeuristicSkipsNonTaintedHeaderValues(t *testing.T) {
+	results := scanContent("server.js", `res.setHeader("X-Trace", response.body);`)
+	if findResult(results, "HTTP Header Injection from User Input") != nil {
+		t.Fatalf("should not flag non-request-derived header values, got %#v", results)
+	}
+}
+
+func TestHeuristicDetectsUserControlledRegex(t *testing.T) {
+	results := scanContent("search.js", `const pattern = new RegExp(req.query.search);`)
+	assertFinding(t, results, "User-Controlled Regex Pattern")
+}
+
+func TestHeuristicSkipsRegexBuiltFromLocalUserVariable(t *testing.T) {
+	results := scanContent("search.js", `const user = "[a-z]+"; const pattern = new RegExp(user);`)
+	if findResult(results, "User-Controlled Regex Pattern") != nil {
+		t.Fatalf("should not flag regex built from a generic local variable, got %#v", results)
+	}
+}
+
+func TestHeuristicDetectsHardcodedIPAllowlist(t *testing.T) {
+	results := scanContent("auth.js", `const allowedIPs = ["10.0.0.1", "192.168.1.100"];`)
+	assertFinding(t, results, "Hardcoded IP-Based Authorization")
+}
+
+func BenchmarkScanContentLargeFile(b *testing.B) {
+	// Simulate a realistic 500-line file with a mix of clean code and a few findings
+	var sb strings.Builder
+	for i := 0; i < 100; i++ {
+		sb.WriteString("const handler" + strings.Repeat("x", i%10) + " = async (req, res) => {\n")
+		sb.WriteString("  const data = await db.find({ id: req.params.id });\n")
+		sb.WriteString("  return res.json(data);\n")
+		sb.WriteString("};\n")
+		sb.WriteString("// This is a regular comment line\n")
+	}
+	// Inject a few real findings
+	sb.WriteString(`const dbUrl = "mongodb+srv://admin:P@ssw0rd123@cluster0.abc.mongodb.net/prod";` + "\n")
+	sb.WriteString(`element.innerHTML = location.hash;` + "\n")
+	sb.WriteString(`const secret = jwt.sign(payload, "secret");` + "\n")
+	sb.WriteString(`db.query("SELECT * FROM users WHERE id = " + req.query.id);` + "\n")
+	content := sb.String()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		scanContent("src/handlers.js", content)
 	}
 }

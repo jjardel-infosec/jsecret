@@ -1,10 +1,12 @@
-.PHONY: build test vet bench clean all cross
+.PHONY: build test vet bench clean all cross cover verify
 
 BINARY = jsecret
-VERSION = 3.1.0
+VERSION = 3.3.0
 LDFLAGS = -ldflags="-s -w"
 
 all: vet test build
+
+verify: vet test
 
 build:
 	go build $(LDFLAGS) -o $(BINARY)
@@ -18,8 +20,12 @@ vet:
 bench:
 	go test ./... -bench=. -benchmem -run=^$$ -count=1
 
+cover:
+	go test ./... -coverprofile=coverage.out -count=1
+	go tool cover -func=coverage.out
+
 clean:
-	rm -f $(BINARY) $(BINARY).exe jsecret-*
+	rm -f $(BINARY) $(BINARY).exe jsecret-* coverage.out
 
 cross: clean
 	GOOS=linux   GOARCH=amd64 CGO_ENABLED=0 go build $(LDFLAGS) -o $(BINARY)-linux-amd64

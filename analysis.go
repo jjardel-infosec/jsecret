@@ -75,6 +75,26 @@ var lowEntropyPatterns = map[string]float64{
 	"Hetzner API Token":            3.5,
 	"PayPal Client Secret":         3.5,
 	"Adyen API Key":                3.5,
+	"Password Assignment":          3.0,
+}
+
+// suppressedOnVendor lists sigs suppressed on vendor/library files to reduce noise
+var suppressedOnVendor = map[string]bool{
+	"Base64 High Entropy String": true,
+	"Localhost Reference":        true,
+	"Private IP (Internal)":      true,
+	"Dev/Stage URL":              true,
+	"Basic Auth String":          true,
+	"OAuth Client Secret":        true,
+	"OAuth Client ID":            true,
+	"Helm Secret Value":          true,
+	"Bearer Token Generic":       true,
+	"Cookie Name Generic":        true,
+	"API Key Generic Detector":   true,
+	"Secret in Variable":         true,
+	"API Key in Variable":        true,
+	"Session ID":                 true,
+	"CSRF Token":                 true,
 }
 
 // skipOnMinified lists sigs suppressed on minified lines to reduce noise
@@ -101,14 +121,146 @@ func isLikelyCodeReference(value string) bool {
 	if strings.HasPrefix(v, "process.env.") {
 		return true
 	}
-	// config.something or settings.something
+	// import.meta.env.VITE_* (Vite/Deno)
+	if strings.HasPrefix(v, "import.meta.env.") {
+		return true
+	}
+	// Deno.env.get("..."), os.Getenv("..."), os.environ["..."]
+	if strings.Contains(v, "Deno.env.") || strings.Contains(v, "os.Getenv") || strings.Contains(v, "os.environ") {
+		return true
+	}
+	// config.get("..."), conf.get(), settings.get()
+	if matched, _ := regexp.MatchString(`(?i)^(?:config|conf|settings|env|cfg)\b\.`, v); matched {
+		return true
+	}
+	// config.something or settings.something — dotted object references
 	if strings.Contains(v, ".") && !strings.Contains(v, " ") && !strings.Contains(v, "/") && len(v) < 60 {
+		// Skip values with @ (emails) or that look like hostnames/filenames
+		if strings.Contains(v, "@") {
+			return false
+		}
 		parts := strings.SplitN(v, ".", 2)
 		if len(parts) == 2 && len(parts[0]) > 0 && parts[0][0] >= 'a' && parts[0][0] <= 'z' {
+			// If the value has 2+ dots, verify it doesn't look like a hostname
+			if strings.Count(v, ".") >= 2 && looksLikeHostname(v) {
+				return false
+			}
+			// If the last segment looks like a file extension or TLD, skip
+			lastDot := strings.LastIndex(v, ".")
+			suffix := v[lastDot+1:]
+			if looksLikeTLDOrExtension(suffix) {
+				return false
+			}
 			return true
 		}
 	}
 	return false
+}
+
+// isLikelyUUID returns true if the value looks like a UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
+var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// looksLikeHostname returns true if the value appears to be a hostname (all lowercase alphanumeric with dots/hyphens)
+func looksLikeHostname(v string) bool {
+	for _, c := range v {
+		if c != '.' && c != '-' && (c < 'a' || c > 'z') && (c < '0' || c > '9') {
+			return false
+		}
+	}
+	return true
+}
+
+// looksLikeTLDOrExtension returns true if suffix looks like a TLD or file extension, not a JS property
+func looksLikeTLDOrExtension(suffix string) bool {
+	known := map[string]bool{
+		"com": true, "net": true, "org": true, "io": true, "dev": true, "app": true,
+		"co": true, "me": true, "info": true, "biz": true, "us": true, "uk": true,
+		"internal": true, "local": true, "corp": true, "intra": true, "private": true,
+		"json": true, "xml": true, "yaml": true, "yml": true, "html": true, "js": true,
+		"ts": true, "css": true, "csv": true, "txt": true, "log": true, "env": true,
+		"conf": true, "cfg": true, "ini": true, "toml": true,
+	}
+	return known[strings.ToLower(suffix)]
+}
+
+func isLikelyUUID(value string) bool {
+	trimmed := trimLiteralValue(value)
+	return uuidPattern.MatchString(trimmed)
+}
+
+// isPureNumeric returns true if the value contains only digits (not a real secret)
+func isPureNumeric(value string) bool {
+	trimmed := trimLiteralValue(value)
+	if len(trimmed) < 8 {
+		return false
+	}
+	for _, r := range trimmed {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func trimLiteralValue(value string) string {
+	return strings.Trim(strings.TrimSpace(value), `'"`+"`")
+}
+
+func normalizeMatchedValue(match string) string {
+	if quoted := extractQuotedValue(match); quoted != "" {
+		return trimLiteralValue(quoted)
+	}
+
+	trimmed := trimLiteralValue(match)
+	for _, separator := range []string{"=", ":"} {
+		idx := strings.LastIndex(trimmed, separator)
+		if idx == -1 || idx >= len(trimmed)-1 {
+			continue
+		}
+		candidate := trimLiteralValue(trimmed[idx+1:])
+		if candidate != "" {
+			return candidate
+		}
+	}
+
+	return trimmed
+}
+
+func isLikelyPlaceholderValue(value string) bool {
+	lower := strings.ToLower(trimLiteralValue(value))
+	if lower == "" {
+		return false
+	}
+
+	placeholders := []string{
+		"example", "sample", "placeholder", "dummy", "test", "mock",
+		"changeme", "replace_me", "replace-me", "your_", "your-",
+		"todo", "tbd", "notset", "unset", "default",
+	}
+
+	for _, marker := range placeholders {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// extractQuotedValue extracts the last quoted string from a match (e.g. password = "value" → value)
+func extractQuotedValue(match string) string {
+	// Find the last quoted value in the match
+	for _, q := range []byte{'"', '\''} {
+		last := strings.LastIndexByte(match, q)
+		if last <= 0 {
+			continue
+		}
+		prev := strings.LastIndexByte(match[:last], q)
+		if prev >= 0 && prev < last-1 {
+			return match[prev+1 : last]
+		}
+	}
+	return ""
 }
 
 // hasRepeatedChars returns true if >60% of chars are the same (e.g. "aaaaaaa...")
@@ -179,11 +331,23 @@ var (
 	insecureCookiePattern       = regexp.MustCompile(`(?i)(?:set-cookie|res\.cookie|response\.cookie|cookie\s*[:=])`)
 	secureCookieFlagPattern     = regexp.MustCompile(`(?i)(?:secure\s*:\s*true|httpOnly\s*:\s*true|__Host-|__Secure-)`)
 	debugModePattern            = regexp.MustCompile(`(?i)(?:debug\s*[:=]\s*true|NODE_ENV\s*[:=!]=?\s*['"]development['"]|app\.debug\s*=\s*True|DEBUG\s*=\s*['"]?(?:True|1|yes)['"]?)`)
-	graphqlIntrospectionPattern = regexp.MustCompile(`(?i)(?:introspection\s*:\s*true|__schema\s*{|IntrospectionQuery)`)
-	exposedSourceMapPattern     = regexp.MustCompile(`(?i)(?://[#@]\s*sourceMappingURL\s*=|\.map['"]?\s*$)`)
+	graphqlIntrospectionPattern = regexp.MustCompile(`(?i)(?:introspection\s*:\s*true|__schema\s*{)`)
+	exposedSourceMapPattern     = regexp.MustCompile(`(?i)//[#@]\s*sourceMappingURL\s*=\s*[^\s]+\.map\b`)
 	nosqlInjectionPattern       = regexp.MustCompile(`(?i)(?:\$(?:gt|gte|lt|lte|ne|in|nin|regex|where|exists)\b|\bfind(?:One)?\s*\(\s*\{[^}]*(?:req\.|request\.|params|body|query))`)
 	exposedStackTracePattern    = regexp.MustCompile(`(?i)(?:res\.(?:send|json)\s*\(\s*(?:err|error)\.stack|stack\s*:\s*(?:err|error)\.stack|stackTrace\s*[:=])`)
 	npmConfigLeakPattern        = regexp.MustCompile(`(?i)(?:_auth\s*=\s*[A-Za-z0-9+/=]{10,}|_authToken\s*=\s*[A-Za-z0-9._-]{10,}|//registry\.npmjs\.org/:_authToken)`)
+
+	// Phase 7: Additional heuristic patterns
+	dangerousHTMLPattern   = regexp.MustCompile(`(?i)dangerouslySetInnerHTML\s*=\s*\{`)
+	corsOriginTrustPattern = regexp.MustCompile(`(?i)(?:allowedOrigins|cors.*origin)\s*[:=]\s*\[.*(?:\*\.|\.\*)`)
+	unsafeIframePattern    = regexp.MustCompile(`(?i)(?:iframe\.src|<iframe[^>]*src)\s*=\s*(?:req\.|request\.|params|query|location|document)`)
+	webhookNoVerifyPattern = regexp.MustCompile(`(?i)(?:webhook|hook|callback)\s*(?:=|:)\s*\(?\s*(?:req|request|event|body)\b`)
+	webhookHMACPattern     = regexp.MustCompile(`(?i)(?:hmac|verify|signature|createHmac|timingSafeEqual)`)
+	dbErrorExposurePattern = regexp.MustCompile(`(?i)(?:res\.(?:send|json|status)\s*\([^)]*(?:err(?:or)?\.message|err(?:or)?\.stack|err(?:or)?\b|sqlMessage|originalError))`)
+	headerInjectionPattern = regexp.MustCompile(`(?i)(?:res\.(?:setHeader|set|header|writeHead)\s*\()`)
+	headerTaintPattern     = regexp.MustCompile(`(?i)(?:(?:req|request)\.(?:query|params|body|headers)|ctx\.(?:query|params)|ctx\.request\.body)`)
+	unsafeRegexUserPattern = regexp.MustCompile(`(?i)new\s+RegExp\s*\(\s*(?:(?:req|request)\.(?:query|params|body)|ctx\.(?:query|params)|ctx\.request\.body)`)
+	hardcodedIPAuthPattern = regexp.MustCompile(`(?i)(?:(?:allowedIPs?|whitelist|trusted(?:IPs?|Proxies))\s*[:=]\s*\[)`)
 )
 
 func scanContent(target, content string) []Result {
@@ -229,6 +393,22 @@ func isLikelyTestOrMockFile(target string) bool {
 	return false
 }
 
+// isLikelyEnvExample returns true if the target is an env example/template file
+func isLikelyEnvExample(target string) bool {
+	base := strings.ToLower(filepath.Base(target))
+	exampleFiles := []string{
+		".env.example", ".env.sample", ".env.template",
+		".env.development", ".env.test", ".env.local.example",
+		"env.example", "env.sample", "env.template",
+	}
+	for _, ef := range exampleFiles {
+		if base == ef {
+			return true
+		}
+	}
+	return false
+}
+
 // suppressedOnTestFiles lists signature names that are commonly false positives in test/mock files
 var suppressedOnTestFiles = map[string]bool{
 	"API Key in Variable":        true,
@@ -238,9 +418,12 @@ var suppressedOnTestFiles = map[string]bool{
 	"Session ID":                 true,
 	"CSRF Token":                 true,
 	"Bearer Token Generic":       true,
+	"Cookie Name Generic":        true,
 	"Basic Auth String":          true,
 	"OAuth Client Secret":        true,
 	"OAuth Client ID":            true,
+	"JJARDEL (Legacy)":           true,
+	"SEGREDOS WAR (Legacy)":      true,
 }
 
 func (c *resultCollector) add(name, priority, match string) {
@@ -263,18 +446,46 @@ func (c *resultCollector) add(name, priority, match string) {
 	})
 }
 
+// passwordNonSecretValues are common non-secret values assigned to password fields
+var passwordNonSecretValues = map[string]bool{
+	"true": true, "false": true, "null": true, "undefined": true,
+	"none": true, "disabled": true, "enabled": true,
+	"required": true, "optional": true, "password": true,
+	"changeme": true, "xxxxxxxx": true, "12345678": true,
+	"encrypted": true, "redacted": true, "hidden": true,
+	"********": true, "[hidden]": true, "[redacted]": true,
+}
+
+// genericSignatures lists signature names that produce noise on UUIDs and pure numeric values
+var genericSignatures = map[string]bool{
+	"API Key in Variable":      true,
+	"Secret in Variable":       true,
+	"API Key Generic Detector": true,
+	"Session ID":               true,
+	"CSRF Token":               true,
+	"OAuth Client Secret":      true,
+	"OAuth Client ID":          true,
+	"Loggly Token":             true,
+}
+
 func collectSignatureFindings(target, content string, add func(name, priority, match string)) {
 	vendorTarget := isLikelyVendorTarget(target)
 	testTarget := isLikelyTestOrMockFile(target)
+	envExample := isLikelyEnvExample(target)
 	isMinified := strings.Count(content, "\n") < 8 && len(content) > 6000
 
 	for _, sig := range Signatures {
-		if vendorTarget && (sig.Name == "Base64 High Entropy String" || sig.Name == "Localhost Reference" || sig.Name == "Private IP (Internal)" || sig.Name == "Dev/Stage URL" || sig.Name == "Basic Auth String" || sig.Name == "OAuth Client Secret" || sig.Name == "OAuth Client ID" || sig.Name == "Helm Secret Value" || sig.Name == "API Key Generic Detector" || sig.Name == "Secret in Variable" || sig.Name == "API Key in Variable" || sig.Name == "Session ID" || sig.Name == "CSRF Token") {
+		if vendorTarget && suppressedOnVendor[sig.Name] {
 			continue
 		}
 
 		// Suppress noise-prone generic signatures in test/mock files
 		if testTarget && suppressedOnTestFiles[sig.Name] {
+			continue
+		}
+
+		// Suppress generic signatures in .env.example/.sample/.template files
+		if envExample && suppressedOnTestFiles[sig.Name] {
 			continue
 		}
 
@@ -288,24 +499,30 @@ func collectSignatureFindings(target, content string, add func(name, priority, m
 			continue
 		}
 
-		matches := sig.Regex.FindAllString(content, -1)
+		matches := sig.Regex.FindAllString(content, 50)
 		for _, match := range matches {
+			value := normalizeMatchedValue(match)
+			normalizedValue := strings.ToLower(value)
+
 			// Skip known safe strings (common hashes, test values)
 			normalizedMatch := strings.ToLower(strings.TrimSpace(match))
 			if knownSafeStrings[normalizedMatch] {
 				continue
 			}
+			if knownSafeStrings[normalizedValue] {
+				continue
+			}
 
 			// Skip repeated-character strings (e.g. "aaaaaaa...")
-			if hasRepeatedChars(normalizedMatch) {
+			if hasRepeatedChars(normalizedValue) {
 				continue
 			}
 
-			if sig.Name == "Base64 High Entropy String" && isHexString(normalizedMatch) {
+			if sig.Name == "Base64 High Entropy String" && isHexString(value) {
 				continue
 			}
 
-			if sig.Name == "Base64 High Entropy String" && isLikelyBase64Noise(normalizedMatch) {
+			if sig.Name == "Base64 High Entropy String" && isLikelyBase64Noise(value) {
 				continue
 			}
 
@@ -313,10 +530,64 @@ func collectSignatureFindings(target, content string, add func(name, priority, m
 			if isLikelyCodeReference(match) {
 				continue
 			}
+			if genericSignatures[sig.Name] && isLikelyCodeReference(value) {
+				continue
+			}
+
+			// Skip UUID-like values for generic patterns (UUIDs are IDs, not secrets)
+			if genericSignatures[sig.Name] && isLikelyUUID(value) {
+				continue
+			}
+
+			// Skip pure numeric values for generic patterns (not real secrets)
+			if genericSignatures[sig.Name] && isPureNumeric(value) {
+				continue
+			}
+
+			// Skip placeholder/template values for generic patterns
+			if genericSignatures[sig.Name] && isLikelyPlaceholderValue(value) {
+				continue
+			}
+
+			if sig.Name == "Bearer Token Generic" {
+				bearerValue := value
+				if idx := strings.Index(strings.ToLower(bearerValue), "bearer "); idx >= 0 {
+					bearerValue = strings.TrimSpace(bearerValue[idx+len("bearer "):])
+				}
+				if len(bearerValue) < 20 || isLikelyPlaceholderValue(bearerValue) {
+					continue
+				}
+				if shannonEntropy(bearerValue) < 3.0 {
+					continue
+				}
+			}
+
+			if sig.Name == "CSRF Token" {
+				hasLetter := false
+				hasDigit := false
+				for _, r := range value {
+					if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' {
+						hasLetter = true
+					}
+					if r >= '0' && r <= '9' {
+						hasDigit = true
+					}
+				}
+				if !hasLetter || !hasDigit {
+					continue
+				}
+			}
 
 			// For patterns prone to false positives, require minimum entropy
 			if minEntropy, ok := lowEntropyPatterns[sig.Name]; ok {
-				if shannonEntropy(match) < minEntropy {
+				if shannonEntropy(value) < minEntropy {
+					continue
+				}
+			}
+
+			// For Password Assignment, filter out common non-secret values
+			if sig.Name == "Password Assignment" {
+				if passwordNonSecretValues[strings.ToLower(value)] {
 					continue
 				}
 			}
@@ -335,6 +606,14 @@ func collectHeuristicFindings(target, content string, add func(name, priority, m
 		return
 	}
 
+	rawLines := splitCodeLines(content)
+	for _, line := range rawLines {
+		text := strings.TrimSpace(line.Text)
+		if strings.Contains(text, "sourceMappingURL") && shouldFlagSourceMapReference(text) {
+			add("Exposed Source Map Reference", "LOW", formatLineEvidence(line.Number, text))
+		}
+	}
+
 	codeOnly := stripJSComments(content)
 	lines := splitCodeLines(codeOnly)
 
@@ -348,7 +627,7 @@ func collectHeuristicFindings(target, content string, add func(name, priority, m
 
 	for _, line := range lines {
 		text := strings.TrimSpace(line.Text)
-		if text == "" {
+		if text == "" || len(text) < 8 {
 			continue
 		}
 
@@ -356,132 +635,241 @@ func collectHeuristicFindings(target, content string, add func(name, priority, m
 			continue
 		}
 
-		if insecureTLSPattern.MatchString(text) {
-			add("TLS Validation Disabled", "HIGH", formatLineEvidence(line.Number, text))
-		}
+		// ── Keyword-gated heuristic checks ──
+		// Instead of running 25+ regex per line, check cheap substrings first.
 
-		if postMessageWildcardPattern.MatchString(text) {
-			add("Wildcard postMessage Target Origin", "HIGH", formatLineEvidence(line.Number, text))
-		}
-
-		if dynamicCodePattern.MatchString(text) {
-			add("Dynamic Code Execution Sink", "HIGH", formatLineEvidence(line.Number, text))
-		}
-
-		if commandExecPattern.MatchString(text) {
-			name := "Command Execution Sink"
-			priority := "MEDIUM"
-			if shellTruePattern.MatchString(text) || taintSourcePattern.MatchString(text) {
-				name = "Potential Command Injection"
-				priority = "HIGH"
+		if strings.Contains(text, "rejectUnauthorized") || strings.Contains(text, "strictSSL") || strings.Contains(text, "NODE_TLS") {
+			if insecureTLSPattern.MatchString(text) {
+				add("TLS Validation Disabled", "HIGH", formatLineEvidence(line.Number, text))
 			}
-			add(name, priority, formatLineEvidence(line.Number, text))
 		}
 
-		if weakCryptoPattern.MatchString(text) {
-			add("Weak Cryptography", "MEDIUM", formatLineEvidence(line.Number, text))
-		}
-
-		if mathRandomPattern.MatchString(text) && sensitiveNamePattern.MatchString(text) {
-			add("Predictable Security Token Generation", "MEDIUM", formatLineEvidence(line.Number, text))
-		}
-
-		if insecureStoragePattern.MatchString(text) && sensitiveNamePattern.MatchString(text) {
-			add("Sensitive Data Stored In Web Storage", "MEDIUM", formatLineEvidence(line.Number, text))
-		}
-
-		if documentCookiePattern.MatchString(text) && sensitiveNamePattern.MatchString(text) {
-			add("Sensitive Token Written To document.cookie", "MEDIUM", formatLineEvidence(line.Number, text))
-		}
-
-		if requestPattern.MatchString(text) && taintSourcePattern.MatchString(text) {
-			add("Potential SSRF / Untrusted Outbound Request", "MEDIUM", formatLineEvidence(line.Number, text))
-		}
-
-		if redirectPattern.MatchString(text) && taintSourcePattern.MatchString(text) {
-			add("Potential Open Redirect", "MEDIUM", formatLineEvidence(line.Number, text))
-		}
-
-		if fileAccessPattern.MatchString(text) && taintSourcePattern.MatchString(text) {
-			add("Potential Path Traversal", "MEDIUM", formatLineEvidence(line.Number, text))
-		}
-
-		if prototypePollutionPattern.MatchString(text) {
-			add("Potential Prototype Pollution", "HIGH", formatLineEvidence(line.Number, text))
-		}
-
-		if objectMergePattern.MatchString(text) {
-			add("Object Merge With User Input", "MEDIUM", formatLineEvidence(line.Number, text))
-		}
-
-		if templateInjectionPattern.MatchString(text) && taintSourcePattern.MatchString(text) {
-			add("Potential Template Injection", "HIGH", formatLineEvidence(line.Number, text))
-		}
-
-		if insecureDeserializePattern.MatchString(text) {
-			add("Potential Insecure Deserialization", "HIGH", formatLineEvidence(line.Number, text))
-		}
-
-		if massAssignmentPattern.MatchString(text) {
-			add("Potential Mass Assignment", "MEDIUM", formatLineEvidence(line.Number, text))
-		}
-
-		if jwtWeakAlgPattern.MatchString(text) {
-			add("JWT Weak Algorithm", "HIGH", formatLineEvidence(line.Number, text))
-		}
-
-		if hardcodedJWTSecretPattern.MatchString(text) {
-			add("Hardcoded JWT Secret", "CRITICAL", formatLineEvidence(line.Number, text))
-		}
-
-		// ── Phase 5: New heuristic detections ──
-
-		if insecureCookiePattern.MatchString(text) && !secureCookieFlagPattern.MatchString(text) {
-			add("Insecure Cookie (Missing Secure/HttpOnly)", "MEDIUM", formatLineEvidence(line.Number, text))
-		}
-
-		if debugModePattern.MatchString(text) {
-			add("Debug Mode Enabled In Production Code", "MEDIUM", formatLineEvidence(line.Number, text))
-		}
-
-		if graphqlIntrospectionPattern.MatchString(text) {
-			add("GraphQL Introspection Enabled", "MEDIUM", formatLineEvidence(line.Number, text))
-		}
-
-		if exposedSourceMapPattern.MatchString(text) {
-			add("Exposed Source Map Reference", "LOW", formatLineEvidence(line.Number, text))
-		}
-
-		if nosqlInjectionPattern.MatchString(text) && taintSourcePattern.MatchString(text) {
-			add("Potential NoSQL Injection", "HIGH", formatLineEvidence(line.Number, text))
-		}
-
-		if exposedStackTracePattern.MatchString(text) {
-			add("Exposed Stack Trace to Client", "MEDIUM", formatLineEvidence(line.Number, text))
-		}
-
-		if npmConfigLeakPattern.MatchString(text) {
-			add("NPM Config Leak (_auth / _authToken)", "HIGH", formatLineEvidence(line.Number, text))
-		}
-
-		// ReDoS: check JS regex literals and new RegExp() on this line
-		checkReDoS(line.Number, text, add)
-
-		if sqlExecutionPattern.MatchString(text) && sqlKeywordPattern.MatchString(text) && dynamicDataPattern.MatchString(text) {
-			add("Potential SQL Injection", "HIGH", formatLineEvidence(line.Number, text))
-		}
-
-		if xssSinkPattern.MatchString(text) && shouldFlagHTMLSink(text) {
-			name := "HTML Injection Sink"
-			priority := "MEDIUM"
-			if taintSourcePattern.MatchString(text) {
-				name = "Potential DOM XSS"
-				priority = "HIGH"
+		if strings.Contains(text, "postMessage") {
+			if postMessageWildcardPattern.MatchString(text) {
+				add("Wildcard postMessage Target Origin", "HIGH", formatLineEvidence(line.Number, text))
 			}
-			add(name, priority, formatLineEvidence(line.Number, text))
 		}
 
-		collectSuspiciousAssignments(line.Number, text, add)
+		if strings.Contains(text, "eval") || strings.Contains(text, "Function(") || strings.Contains(text, "setTimeout") || strings.Contains(text, "setInterval") {
+			if dynamicCodePattern.MatchString(text) {
+				add("Dynamic Code Execution Sink", "HIGH", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		if strings.Contains(text, "exec") || strings.Contains(text, "spawn") || strings.Contains(text, "fork(") {
+			if commandExecPattern.MatchString(text) {
+				name := "Command Execution Sink"
+				priority := "MEDIUM"
+				if shellTruePattern.MatchString(text) || taintSourcePattern.MatchString(text) {
+					name = "Potential Command Injection"
+					priority = "HIGH"
+				}
+				add(name, priority, formatLineEvidence(line.Number, text))
+			}
+		}
+
+		if strings.Contains(text, "createHash") || strings.Contains(text, "CryptoJS") || strings.Contains(text, "md5") || strings.Contains(text, "sha1") || strings.Contains(text, "createCipher") || strings.Contains(text, "DES") || strings.Contains(text, "RC4") || strings.Contains(text, "ECB") {
+			if weakCryptoPattern.MatchString(text) {
+				add("Weak Cryptography", "MEDIUM", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		if strings.Contains(text, "Math.random") {
+			if mathRandomPattern.MatchString(text) && sensitiveNamePattern.MatchString(text) {
+				add("Predictable Security Token Generation", "MEDIUM", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		if strings.Contains(text, "Storage") || strings.Contains(text, "localStorage") || strings.Contains(text, "sessionStorage") {
+			if insecureStoragePattern.MatchString(text) && sensitiveNamePattern.MatchString(text) {
+				add("Sensitive Data Stored In Web Storage", "MEDIUM", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		if strings.Contains(text, "document.cookie") {
+			if documentCookiePattern.MatchString(text) && sensitiveNamePattern.MatchString(text) {
+				add("Sensitive Token Written To document.cookie", "MEDIUM", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		if strings.Contains(text, "fetch") || strings.Contains(text, "axios") || strings.Contains(text, "http") || strings.Contains(text, "request(") {
+			if requestPattern.MatchString(text) && taintSourcePattern.MatchString(text) {
+				add("Potential SSRF / Untrusted Outbound Request", "MEDIUM", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		if strings.Contains(text, "redirect") || strings.Contains(text, "location") {
+			if redirectPattern.MatchString(text) && taintSourcePattern.MatchString(text) {
+				add("Potential Open Redirect", "MEDIUM", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		if strings.Contains(text, "fs.") || strings.Contains(text, "sendFile") || strings.Contains(text, "readFile") {
+			if fileAccessPattern.MatchString(text) && taintSourcePattern.MatchString(text) {
+				add("Potential Path Traversal", "MEDIUM", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		if strings.Contains(text, "__proto__") || strings.Contains(text, "prototype") {
+			if prototypePollutionPattern.MatchString(text) {
+				add("Potential Prototype Pollution", "HIGH", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		if strings.Contains(text, "assign") || strings.Contains(text, "merge") || strings.Contains(text, "extend") || strings.Contains(text, "deepmerge") {
+			if objectMergePattern.MatchString(text) {
+				add("Object Merge With User Input", "MEDIUM", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		if strings.Contains(text, "render") || strings.Contains(text, "template") || strings.Contains(text, "compile") {
+			if templateInjectionPattern.MatchString(text) && taintSourcePattern.MatchString(text) {
+				add("Potential Template Injection", "HIGH", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		if strings.Contains(text, "unserialize") || strings.Contains(text, "deserialize") || strings.Contains(text, "fromJSON") || strings.Contains(text, "YAML") {
+			if insecureDeserializePattern.MatchString(text) {
+				add("Potential Insecure Deserialization", "HIGH", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		if strings.Contains(text, "update(") || strings.Contains(text, "create(") || strings.Contains(text, "body)") || strings.Contains(text, "req.body") {
+			if massAssignmentPattern.MatchString(text) {
+				add("Potential Mass Assignment", "MEDIUM", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		if strings.Contains(text, "algorithm") || strings.Contains(text, "none") {
+			if jwtWeakAlgPattern.MatchString(text) {
+				add("JWT Weak Algorithm", "HIGH", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		if strings.Contains(text, "sign(") || strings.Contains(text, "secret") || strings.Contains(text, "jwt") {
+			if hardcodedJWTSecretPattern.MatchString(text) {
+				add("Hardcoded JWT Secret", "CRITICAL", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		if strings.Contains(text, "cookie") || strings.Contains(text, "Cookie") {
+			if insecureCookiePattern.MatchString(text) && !secureCookieFlagPattern.MatchString(text) {
+				add("Insecure Cookie (Missing Secure/HttpOnly)", "MEDIUM", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		if strings.Contains(text, "debug") || strings.Contains(text, "DEBUG") || strings.Contains(text, "verbose") || strings.Contains(text, "NODE_ENV") || strings.Contains(text, "development") {
+			if shouldFlagDebugMode(text) {
+				add("Debug Mode Enabled In Production Code", "MEDIUM", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		if strings.Contains(text, "introspection") {
+			if graphqlIntrospectionPattern.MatchString(text) {
+				add("GraphQL Introspection Enabled", "MEDIUM", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		if strings.Contains(text, "$where") || strings.Contains(text, "$regex") || strings.Contains(text, "$gt") || strings.Contains(text, "$ne") {
+			if nosqlInjectionPattern.MatchString(text) && taintSourcePattern.MatchString(text) {
+				add("Potential NoSQL Injection", "HIGH", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		if strings.Contains(text, "stack") || strings.Contains(text, "Stack") || strings.Contains(text, "trace") {
+			if exposedStackTracePattern.MatchString(text) {
+				add("Exposed Stack Trace to Client", "MEDIUM", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		if strings.Contains(text, "_auth") || strings.Contains(text, "authToken") || strings.Contains(text, "npm") {
+			if npmConfigLeakPattern.MatchString(text) {
+				add("NPM Config Leak (_auth / _authToken)", "HIGH", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		// ReDoS: only check lines containing regex-like patterns
+		if strings.Contains(text, "RegExp") || strings.ContainsAny(text, "/") {
+			checkReDoS(line.Number, text, add)
+		}
+
+		if strings.Contains(text, "query") || strings.Contains(text, "execute") || strings.Contains(text, "Query") {
+			if sqlExecutionPattern.MatchString(text) && sqlKeywordPattern.MatchString(text) && dynamicDataPattern.MatchString(text) {
+				add("Potential SQL Injection", "HIGH", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		if strings.Contains(text, "innerHTML") || strings.Contains(text, "outerHTML") || strings.Contains(text, "write(") || strings.Contains(text, "insertAdjacentHTML") {
+			if xssSinkPattern.MatchString(text) && shouldFlagHTMLSink(text) {
+				name := "HTML Injection Sink"
+				priority := "MEDIUM"
+				if taintSourcePattern.MatchString(text) {
+					name = "Potential DOM XSS"
+					priority = "HIGH"
+				}
+				add(name, priority, formatLineEvidence(line.Number, text))
+			}
+		}
+
+		// Phase 7: dangerouslySetInnerHTML (React XSS)
+		if strings.Contains(text, "dangerouslySetInnerHTML") {
+			if dangerousHTMLPattern.MatchString(text) && !sanitizerPattern.MatchString(text) {
+				add("React dangerouslySetInnerHTML Usage", "MEDIUM", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		// Phase 7: CORS origin misconfiguration
+		if strings.Contains(text, "allowedOrigins") || strings.Contains(text, "cors") {
+			if corsOriginTrustPattern.MatchString(text) {
+				add("Overly Permissive CORS Origin", "MEDIUM", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		// Phase 7: Unsafe iframe src from user input
+		if strings.Contains(text, "iframe") {
+			if unsafeIframePattern.MatchString(text) {
+				add("Unsafe Iframe Source from User Input", "HIGH", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		// Phase 7: Webhook endpoint without HMAC verification
+		if strings.Contains(text, "webhook") || strings.Contains(text, "hook") || strings.Contains(text, "callback") {
+			if shouldFlagWebhookHandler(text) {
+				add("Webhook Handler Without Signature Verification", "MEDIUM", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		// Phase 7: Database error exposed to client
+		if strings.Contains(text, "err") && (strings.Contains(text, "res.") || strings.Contains(text, "response.")) {
+			if dbErrorExposurePattern.MatchString(text) {
+				add("Error Details Exposed to Client", "MEDIUM", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		// Phase 7: HTTP header injection from user input
+		if strings.Contains(text, "setHeader") || strings.Contains(text, "writeHead") || strings.Contains(text, "set(") {
+			if shouldFlagHeaderInjection(text) {
+				add("HTTP Header Injection from User Input", "HIGH", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		// Phase 7: Regex from user input (ReDoS via user-controlled pattern)
+		if strings.Contains(text, "RegExp") {
+			if unsafeRegexUserPattern.MatchString(text) {
+				add("User-Controlled Regex Pattern", "HIGH", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		// Phase 7: Hardcoded IP allowlist
+		if strings.Contains(text, "allowedIP") || strings.Contains(text, "whitelist") || strings.Contains(text, "trustedIP") || strings.Contains(text, "trustedProx") {
+			if hardcodedIPAuthPattern.MatchString(text) {
+				add("Hardcoded IP-Based Authorization", "MEDIUM", formatLineEvidence(line.Number, text))
+			}
+		}
+
+		if strings.ContainsAny(text, "=:") {
+			collectSuspiciousAssignments(line.Number, text, add)
+		}
 	}
 }
 
@@ -544,6 +932,44 @@ func shouldFlagHTMLSink(line string) bool {
 	default:
 		return false
 	}
+}
+
+func shouldFlagWebhookHandler(line string) bool {
+	if !webhookNoVerifyPattern.MatchString(line) || webhookHMACPattern.MatchString(line) {
+		return false
+	}
+
+	hasHandlerShape := strings.Contains(line, "=>") || strings.Contains(line, "function")
+	if !hasHandlerShape {
+		return false
+	}
+
+	hasInboundPayload := strings.Contains(line, "req.body") || strings.Contains(line, "request.body") || strings.Contains(line, "event.body")
+	return hasInboundPayload
+}
+
+func shouldFlagDebugMode(line string) bool {
+	if !debugModePattern.MatchString(line) {
+		return false
+	}
+
+	if strings.Contains(line, "==") || strings.Contains(line, "!=") {
+		return false
+	}
+
+	return true
+}
+
+func shouldFlagHeaderInjection(line string) bool {
+	if !headerInjectionPattern.MatchString(line) {
+		return false
+	}
+
+	return headerTaintPattern.MatchString(line)
+}
+
+func shouldFlagSourceMapReference(line string) bool {
+	return exposedSourceMapPattern.MatchString(line)
 }
 
 func hasDynamicFragment(fragment string) bool {
@@ -829,6 +1255,7 @@ func shannonEntropy(value string) float64 {
 
 func stripJSComments(content string) string {
 	var out strings.Builder
+	out.Grow(len(content))
 	inSingle := false
 	inDouble := false
 	inTemplate := false
@@ -958,44 +1385,42 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+// vendorExactBasenames are basenames that mark the file as vendor/library
+var vendorExactBasenames = map[string]bool{
+	"app.js": true, "all.js": true, "js.js": true,
+	"fontawesome.js": true, "player.js": true,
+	"runtime.js": true, "polyfills.js": true,
+}
+
+// vendorSubstringMarkers are substrings checked anywhere in the path
+var vendorSubstringMarkers = []string{
+	".min.js", ".chunk.js", ".xhtml.js",
+	"jquery", "bootstrap", "react", "vue", "redux",
+	"moment", "modernizr", "datatables", "fitvids",
+	"migrate", "bxslider", "i18next", "richfaces",
+	"chart", "vendor", "bundle", "chunk", "node_modules",
+}
+
 func isLikelyVendorTarget(target string) bool {
 	lower := strings.ToLower(target)
 	base := strings.ToLower(filepath.Base(target))
-	unixBase := strings.ToLower(path.Base(strings.ReplaceAll(target, "\\", "/")))
 
-	vendorMarkers := []string{
-		".min.js",
-		".chunk.js",
-		".xhtml.js",
-		"jquery",
-		"bootstrap",
-		"react",
-		"vue",
-		"redux",
-		"moment",
-		"modernizr",
-		"datatables",
-		"fitvids",
-		"migrate",
-		"bxslider",
-		"i18next",
-		"richfaces",
-		"chart",
-		"vendor",
-		"bundle",
-		"chunk",
-		"node_modules",
-		"app.js",
-		"all.js",
-		"js.js",
-		"fontawesome.js",
-		"player.js",
-		"runtime.js",
-		"polyfills.js",
+	// Fast exact-match on basename
+	if vendorExactBasenames[base] {
+		return true
 	}
 
-	for _, marker := range vendorMarkers {
-		if strings.Contains(lower, marker) || strings.Contains(base, marker) || strings.Contains(unixBase, marker) {
+	// Cross-platform base
+	unixBase := base
+	if strings.ContainsRune(target, '\\') {
+		unixBase = strings.ToLower(path.Base(strings.ReplaceAll(target, "\\", "/")))
+	}
+	if unixBase != base && vendorExactBasenames[unixBase] {
+		return true
+	}
+
+	for _, marker := range vendorSubstringMarkers {
+		if strings.Contains(lower, marker) {
 			return true
 		}
 	}
@@ -1012,19 +1437,20 @@ func isLikelyVendorTarget(target string) bool {
 }
 
 func isLikelyMinifiedLine(line string) bool {
-	if len(line) < 600 {
+	l := len(line)
+	if l < 600 {
 		return false
 	}
 
 	spaces := 0
-	for i := 0; i < len(line); i++ {
-		switch line[i] {
-		case ' ', '\t':
+	for i := 0; i < l; i++ {
+		if line[i] == ' ' || line[i] == '\t' {
 			spaces++
 		}
 	}
 
-	return float64(spaces)/float64(len(line)) < 0.02
+	// spaces/len < 0.02  ⇒  spaces*50 < len (avoids float division)
+	return spaces*50 < l
 }
 
 func isHexString(value string) bool {
@@ -1118,12 +1544,17 @@ func isVulnerableRegex(pattern string) bool {
 }
 
 func isLikelyBundledContent(content string) bool {
-	lower := strings.ToLower(content)
-	if strings.Contains(lower, "webpackchunk") || strings.Contains(lower, "webpackjsonp") || strings.Contains(lower, "webpackjsonprlms") {
+	// Only skip heuristics for known bundler signatures — not merely long single-line files,
+	// which can be legitimate compact code with real vulnerabilities.
+	if strings.Contains(content, "webpackChunk") || strings.Contains(content, "webpackJsonp") ||
+		strings.Contains(content, "webpackJsonpRlms") {
 		return true
 	}
 
-	if strings.Count(content, "\n") < 8 && len(content) > 6000 {
+	// Parcel, Rollup, esbuild bundler signatures
+	if strings.Contains(content, "parcelRequire") ||
+		strings.Contains(content, "__rollupBundleStart") ||
+		strings.Contains(content, "__esbuild_") {
 		return true
 	}
 

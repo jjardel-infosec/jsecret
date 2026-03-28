@@ -1,139 +1,273 @@
-# jsecret v3.1 — The Ultimate JS Security Scanner
+# jsecret
 
-`jsecret` is a blazing-fast, zero-dependency Go tool that detects secrets, credentials, and security vulnerabilities in JavaScript/TypeScript files. It combines **200+ regex signatures** for known token formats with **50+ heuristic checks** for code-level security flaws.
+`jsecret` is a zero-dependency static scanner for JavaScript and TypeScript assets. It is built to find exposed secrets, risky client-side patterns, and bug bounty-relevant findings in source code, compiled bundles, remote scripts, and exposed source maps.
 
-## What's New in v3.1
+It combines a broad provider-aware signature catalog with a growing set of context-aware heuristics, then spends real effort suppressing the false positives that normally make scanners noisy in real projects.
 
-- **`.jsecretignore` support** — exclude paths with gitignore-style patterns
-- **Test/mock file awareness** — suppresses generic noisy signatures on `*.test.js`, `*.spec.js`, `__tests__/`, `__mocks__/`, `fixtures/` etc.
-- **Bcrypt/Argon2/Scrypt hash recognition** — properly hashed passwords are no longer flagged as hardcoded credentials
-- **Expanded entropy thresholds** — 10 more signatures now have per-pattern entropy gates (Fastly, Splunk, Logz.io, Hetzner, Vultr, etc.)
-- **File path / CSS selector FP filter** — values starting with `/`, `./`, `../` or `.class-name` are no longer flagged as secrets
-- **52 tests** with CI workflow and cross-compilation Makefile
+Current release: `v3.3.0`
 
-## Installation
+## Why jsecret
 
-### Via Go
+- built for real JS and TS targets, not only toy examples
+- useful for bug bounty, appsec reviews, CI gates, and client-side recon
+- deterministic TXT, CSV, JSON, SARIF, and Markdown outputs
+- tuned to reduce noise from tests, fixtures, placeholders, env references, bundles, and generated code
+- stdlib-only Go implementation with no third-party runtime dependencies
+- backed by `128` automated tests, including CLI integration coverage
+
+## What It Detects
+
+### Signature detections
+
+`jsecret` ships with `200+` signature patterns across categories such as:
+
+- cloud and infrastructure: AWS, GCP, Azure, Alibaba, DigitalOcean, Heroku, Scaleway, Hetzner, Linode, Vultr, Fastly
+- AI, LLM, and vector providers: OpenAI, Anthropic, DeepSeek, xAI, Perplexity, Fireworks, Groq, Cohere, Mistral, Together, Pinecone, Weaviate, Qdrant, Replicate
+- databases and queues: MongoDB, PostgreSQL, MySQL, Redis, Elasticsearch, Snowflake, CockroachDB, ClickHouse, Cassandra, RabbitMQ, Memcached, InfluxDB
+- source control and CI/CD: GitHub, GitLab, Bitbucket, CircleCI, Travis, Jenkins, Azure DevOps, GitHub Actions, Buildkite, Terraform, Pulumi
+- payment and communications: Stripe, Square, Braintree, PayPal, Adyen, Coinbase, Plaid, Slack, Twilio, SendGrid, Mailgun, Telegram, Discord, Postmark, Mailchimp, SparkPost, Vonage, Pusher, Ably
+- SaaS and deployment platforms: Vercel, Clerk, PlanetScale, Neon, Railway, Render, Fly.io, Deno Deploy, Expo, Arcjet, Trigger.dev, Resend, Infisical, Doppler
+- keys and certificates: private key blocks, PEM material, generic high-signal auth material, JWTs, bearer tokens, and more
+
+### Heuristic detections
+
+`jsecret` also detects `50+` risky code patterns, including:
+
+- DOM XSS and unsafe HTML sinks
+- SQL, NoSQL, command, and template injection patterns
+- SSRF, open redirect, and unsafe outbound request flows
+- weak crypto, insecure token generation, and disabled TLS validation
+- hardcoded credentials and JWT misuse
+- permissive CORS and wildcard postMessage usage
+- insecure cookie settings and web storage abuse
+- prototype pollution, mass assignment, and unsafe regex construction
+- GraphQL introspection exposure and source map exposure
+- exposed stack traces and npm auth leakage
+
+## False Positive Strategy
+
+The project is explicitly optimized for signal quality. It does not just add patterns; it also removes bad ones.
+
+Key controls include:
+
+- placeholder and example suppression for values such as `changeme`, `your_key_here`, `${TOKEN}`, and `{{SECRET}}`
+- per-pattern entropy thresholds for noisy token classes
+- test, spec, fixture, mock, and env-example awareness
+- bcrypt, Argon2, and scrypt hash recognition
+- minified-content suppression for selected noisy signatures
+- vendor and generated bundle suppression
+- safe-value suppression for empty hashes, charsets, and common example material
+- code-reference suppression for values such as `process.env.*` and `config.*`
+- path-like and CSS-selector-like value suppression
+- targeted heuristic refinements for React sanitization, webhook handlers, debug checks, CORS wildcard handling, GraphQL introspection, error leakage, header taint, source maps, and user-controlled regexes
+
+## Quick Start
+
+### Install
+
+With Go:
+
 ```bash
 go install github.com/jjardel-infosec/jsecret@latest
 ```
 
-### From Source
+From source:
+
 ```bash
 git clone https://github.com/jjardel-infosec/jsecret.git
 cd jsecret
 go build -o jsecret
 ```
 
-Move to global path (Linux/macOS):
+Optional install path on Linux or macOS:
+
 ```bash
 sudo mv jsecret /usr/local/bin/
 ```
 
-## Usage
+### First scan
 
-### Flags
+Scan a local project:
+
+```bash
+jsecret -d ./frontend
+```
+
+Scan remote assets from stdin:
+
+```bash
+cat urls.txt | jsecret
+```
+
+Generate a CI-friendly SARIF report and fail on blocking findings:
+
+```bash
+jsecret -d . -min HIGH -strict -sarif results.sarif
+```
+
+## Scan Modes
+
+| Mode | Flag | Input |
+|------|------|-------|
+| Single target | `-u` | one remote script URL |
+| Target list file | `-f` | one target per line |
+| Recursive directory scan | `-d` | local directory |
+| Stdin mode | none | one target per line from stdin |
+
+Directory mode scans these extensions by default:
+
+` .js, .mjs, .cjs, .jsx, .ts, .tsx, .vue, .svelte `
+
+Use `-ext` to override the set.
+
+## CLI Reference
 
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-u` | Single URL to scan | |
-| `-f` | File containing list of URLs | |
+| `-f` | File containing a list of targets | |
 | `-d` | Directory to scan recursively | |
 | `-o` | Save results to TXT file | |
 | `-csv` | Save results to CSV file | |
 | `-json` | Save results to JSON file | |
 | `-sarif` | Save results to SARIF v2.1.0 file | |
-| `-min` | Minimum severity: CRITICAL, HIGH, MEDIUM, LOW | all |
+| `-md` | Save results to Markdown report | |
+| `-min` | Minimum severity: `CRITICAL`, `HIGH`, `MEDIUM`, `LOW` | all |
 | `-proxy` | HTTP/HTTPS proxy URL | |
-| `-ext` | Custom file extensions (comma-separated) | `.js,.mjs,.cjs,.jsx,.ts,.tsx,.vue,.svelte` |
-| `-t` | Concurrent threads | 50 |
-| `-s` | Silent mode (no banner/summary) | false |
-| `-strict` | Exit code 1 if CRITICAL/HIGH findings | false |
-| `-h` | Show help | |
+| `-k` | Skip TLS certificate verification for HTTPS requests | `false` |
+| `-ext` | Custom file extensions for directory scans | `.js,.mjs,.cjs,.jsx,.ts,.tsx,.vue,.svelte` |
+| `-t` | Concurrent threads | `50` |
+| `-s` | Silent mode: suppress banner, summary, and fetch warnings | `false` |
+| `-strict` | Exit with code `1` if `CRITICAL` or `HIGH` findings exist | `false` |
+| `-h` | Show help output | |
 
-### Examples
+## Practical Examples
+
+Scan a local application and only keep high-signal findings:
 
 ```bash
-# Pipe from other tools
-cat subdomains.txt | httpx | jsecret
-
-# Recursive local scan with severity filter
-jsecret -d ./my_project -min HIGH -strict
-
-# URL scan with JSON output
-jsecret -u https://example.com/app.js -json findings.json
-
-# Bulk scan with SARIF output for CI integration
-jsecret -f urls.txt -sarif report.sarif -strict
-
-# Custom extensions and proxy
-jsecret -d . -ext .js,.ts,.vue -proxy http://127.0.0.1:8080
-
-# CSV report with high concurrency
-jsecret -f js_urls.txt -csv report.csv -t 200
-
-# Directory scan, only critical findings
-jsecret -d /path/to/project -min CRITICAL -o critical.txt
+jsecret -d ./webapp -min HIGH
 ```
 
-## Detection Coverage
+Write a Markdown report for manual review:
 
-### Signature Pass (200+ patterns)
-
-| Category | Examples | Count |
-|----------|---------|-------|
-| **Cloud Providers** | AWS (Access Key, Secret, STS, RDS), GCP, Azure, Alibaba, DigitalOcean, Heroku | 20+ |
-| **AI/ML Services** | OpenAI, Anthropic, DeepSeek, xAI/Grok, Perplexity, Fireworks, HuggingFace, Groq, Cohere, Mistral, Together, Pinecone, Weaviate, Qdrant, Replicate | 17 |
-| **Databases** | MongoDB, PostgreSQL, MySQL, Redis, Elasticsearch, Snowflake, CockroachDB, ClickHouse, Cassandra, Supabase, Firebase, JDBC, RabbitMQ, Memcached, InfluxDB | 20+ |
-| **Git Platforms** | GitHub (PAT, Fine-Grained, OAuth), GitLab (PAT, Runner), Bitbucket | 10 |
-| **CI/CD** | CircleCI, Travis, Jenkins, Azure DevOps, GitHub Actions, Buildkite, Terraform, Pulumi | 12 |
-| **Payments** | Stripe (Secret/Publishable), Square, Braintree, PayPal, Adyen, Coinbase, Plaid | 9 |
-| **Communication** | Slack (Token/Webhook), Twilio, SendGrid, Mailgun, Telegram, Discord, Postmark, Mailchimp, SparkPost, Vonage, Pusher, Ably | 15+ |
-| **Modern SaaS** | Supabase, Vercel, Clerk, PlanetScale, Neon, Railway, Render, Fly.io, Deno Deploy, Expo, Arcjet, Trigger.dev, Resend, Infisical, Doppler | 20+ |
-| **Secrets/Vault** | HashiCorp Vault, 1Password Connect, Doppler, Kubernetes Secrets | 8 |
-| **Observability** | Datadog, Sentry, New Relic, Bugsnag, Grafana, Splunk HEC, Dynatrace, Honeycomb, LaunchDarkly, PagerDuty, Elastic APM, Logz.io | 15+ |
-| **DevOps/Infra** | Scaleway, Hetzner, Linode, Vultr, Fastly, Cloudflare Workers KV | 10+ |
-| **Keys & Certs** | RSA/DSA/EC/OPENSSH/PGP Private Keys, PEM Certificates | 3 |
-| **Generic** | JWT, Bearer Tokens, Base64 High Entropy, Password Assignments, Basic Auth | 15+ |
-
-### Heuristic Pass (50+ detections)
-
-| Category | Detections |
-|----------|------------|
-| **Injection** | SQL Injection, NoSQL Injection, Command Injection, Template Injection |
-| **XSS** | DOM XSS (innerHTML, outerHTML, document.write, dangerouslySetInnerHTML), HTML Injection Sinks |
-| **SSRF/Redirect** | Untrusted Outbound Requests, Open Redirect |
-| **Crypto** | Weak Cryptography (MD5, SHA1, DES, RC4, ECB), Predictable Token Generation (Math.random) |
-| **Auth/Session** | JWT Weak Algorithm, Hardcoded JWT Secret, Hardcoded Credentials, Web Storage Sensitive Data |
-| **CORS** | Wildcard Origin + Credentials, Origin Reflection without validation |
-| **Cookies** | Missing Secure/HttpOnly flags |
-| **Prototype** | Prototype Pollution, Object Merge with User Input, Mass Assignment |
-| **Config** | Debug Mode in Production, GraphQL Introspection Enabled, Exposed Source Maps |
-| **Leaks** | Exposed Stack Trace, NPM Config Leak (_auth/_authToken) |
-| **Privacy** | Path Traversal, Insecure Deserialization, TLS Validation Disabled |
-| **ReDoS** | Nested quantifiers `(a+)+`, triple greedy `.*.*.*`, star-star overlap, nested repetition |
-| **postMessage** | Wildcard target origin |
-
-### False Positive Prevention
-
-- **67+ placeholder patterns** (changeme, your_key_here, ${TOKEN}, {{SECRET}}, etc.)
-- **Per-pattern entropy thresholds** — 25+ signatures require minimum Shannon entropy
-- **Test/mock file suppression** — generic signatures (API Key Generic, Session ID, etc.) suppressed in test/spec/fixture files
-- **Bcrypt/Argon2/Scrypt detection** — properly hashed passwords are never flagged
-- **Minified content skip** — noise-prone signatures suppressed on minified lines
-- **Vendor/bundle detection** — skips jQuery, React, webpack bundles, hex-named chunks
-- **Known safe strings** — SHA1/256/MD5 empty hashes, Base64 charsets, test values
-- **Code reference filter** — skips `process.env.*`, `config.*` variable dereferences
-- **File path filter** — skips values that are file paths (`/usr/...`, `./...`, `../...`)
-- **CSS class filter** — skips values that look like CSS selectors (`.btn-primary`)
-- **Repeated character filter** — skips strings with >60% same character
-- **`.jsecretignore`** — user-defined exclusion patterns (see below)
-
-### `.jsecretignore`
-
-Create a `.jsecretignore` file in the scan root directory. Uses glob-style patterns:
-
+```bash
+jsecret -d ./assets -md report.md
 ```
+
+Scan a file containing collected script URLs:
+
+```bash
+jsecret -f js_urls.txt -json findings.json
+```
+
+Use a proxy during recon:
+
+```bash
+jsecret -f urls.txt -proxy http://127.0.0.1:8080 -json proxy-scan.json
+```
+
+Scan a self-signed staging target:
+
+```bash
+jsecret -u https://staging.example.local/app.js -k
+```
+
+Scan custom file types in a repo:
+
+```bash
+jsecret -d . -ext .js,.ts,.scan,.bundle
+```
+
+Use stdin mode in a pipeline:
+
+```bash
+cat subdomains.txt | httpx | jsecret -min HIGH
+```
+
+## Output Formats
+
+### TXT
+
+Default console-style output, also available through `-o`.
+
+```text
+[https://example.com/app.js] [CRITICAL] AWS Access Key ID : AKIAIOSFODNN7EXAMPLE
+```
+
+### CSV
+
+Useful for spreadsheets and quick triage exports.
+
+Columns:
+
+- `Target`
+- `Priority`
+- `Finding Type`
+- `Evidence`
+
+### JSON
+
+Structured output for custom automation.
+
+```json
+[
+  {
+    "target": "https://example.com/app.js",
+    "priority": "CRITICAL",
+    "finding": "AWS Access Key ID",
+    "evidence": "AKIAIOSFODNN7EXAMPLE",
+    "category": "signature",
+    "line": 42
+  }
+]
+```
+
+Notes:
+
+- `category` is `signature` or `heuristic`
+- `line` is populated when line-aware evidence exists, typically for heuristics
+
+### SARIF
+
+Use `-sarif` for GitHub Code Scanning, VS Code SARIF viewers, or other SARIF-aware tooling.
+
+The SARIF output includes:
+
+- rule metadata
+- normalized severities
+- artifact locations
+- line regions when available
+
+### Markdown
+
+Use `-md` when you want a readable report grouped by severity and target. This is useful for bug bounty submissions, review handoffs, and manual triage.
+
+## Severity Model
+
+`jsecret` emits four severities:
+
+- `CRITICAL`: highest-confidence secrets or immediately dangerous exposures
+- `HIGH`: likely exploitable or high-risk findings
+- `MEDIUM`: relevant security weakness that needs review
+- `LOW`: informative finding that may support broader analysis
+
+Use `-min` to suppress lower-priority output and `-strict` to fail when blocking findings are present.
+
+## Ignoring Files with .jsecretignore
+
+Create a `.jsecretignore` file in the scan root to exclude known-noisy or intentionally ignored content.
+
+Supported matching behavior:
+
+- basename globs such as `*.test.js`
+- nested directory patterns such as `generated/`
+- root-anchored paths such as `/build/`
+- recursive patterns such as `**/generated/**`
+
+Example:
+
+```text
 # Skip test directories
 tests/
 __tests__/
@@ -147,57 +281,123 @@ config.example.js
 # Skip generated code
 **/generated/**
 dist/
-build/
+/build/
 ```
 
-## Output Formats
+Important behavior:
 
-### TXT (default terminal)
-```
-[https://example.com/app.js] [CRITICAL] AWS Access Key ID : AKIAIOSFODNN7EXAMPLE
-```
-
-### JSON (`-json`)
-```json
-[
-  {
-    "target": "https://example.com/app.js",
-    "priority": "CRITICAL",
-    "finding": "AWS Access Key ID",
-    "evidence": "AKIAIOSFODNN7EXAMPLE",
-    "category": "signature"
-  }
-]
-```
-
-### SARIF v2.1.0 (`-sarif`)
-Compatible with GitHub Code Scanning, VS Code SARIF Viewer, and other SARIF-aware tools.
-
-### CSV (`-csv`)
-| Target | Priority | Finding Type | Evidence |
-|--------|----------|-------------|----------|
-| app.js | CRITICAL | AWS Access Key ID | AKIA... |
+- `dist/` and `build/` are scanned by default
+- hidden directories, `.git`, and `node_modules` are skipped automatically
+- use `.jsecretignore` only when you explicitly want to suppress content
 
 ## CI/CD Integration
 
-Use `-strict` to fail pipelines when CRITICAL or HIGH findings are detected:
+Use `-strict` to fail a pipeline when `CRITICAL` or `HIGH` findings are present.
 
 ```bash
 jsecret -d ./src -min HIGH -strict -sarif results.sarif
 ```
 
-Exit code `1` = findings found. Upload `results.sarif` to GitHub Code Scanning or your SIEM.
+Recommended pre-release workflow:
+
+```bash
+make verify
+jsecret -d . -min HIGH -strict -sarif results.sarif
+```
+
+Example GitHub Actions step:
+
+```yaml
+- name: Verify repository
+  run: make verify
+
+- name: Scan JavaScript assets
+  run: ./jsecret -d . -min HIGH -strict -sarif results.sarif
+```
+
+## Exit Codes
+
+- `0`: scan completed without blocking findings, or help output was shown
+- `1`: invalid CLI input, output or proxy setup failure, or `-strict` found `CRITICAL` or `HIGH` results
+
+## Troubleshooting
+
+No findings from compiled output:
+Check `.jsecretignore`. `dist/` and `build/` are included by default now.
+
+Remote scan fails with TLS errors:
+Use `-k` only when you intentionally need to scan a self-signed or intercepted endpoint.
+
+Remote scan prints warnings:
+Fetch warnings are deduplicated in normal mode and suppressed entirely with `-s`.
+
+Custom file types are skipped:
+Pass `-ext` with a comma-separated list such as `.js,.ts,.scan`.
+
+Need a single validation command before pushing changes:
+Use `make verify`.
 
 ## Architecture
 
-- **Zero external dependencies** — stdlib-only Go
-- **Worker pool** — configurable concurrency (default 50 workers)
-- **Two-pass analysis** — regex signatures + heuristic code analysis
-- **Content dedup** — MD5-based `sync.Map` prevents re-scanning identical content
-- **Connection pooling** — 200 idle connections, 20 per host
-- **Body limit** — 10MB max to prevent OOM on large files
-- **Source map resolution** — follows `sourceMappingURL` to scan original sources
-- **Prefix pre-filtering** — static substring check before regex evaluation
+Core design choices:
+
+- zero external dependencies
+- two-pass analysis: signatures plus heuristics
+- SHA-256 content deduplication to skip repeated assets
+- connection pooling with keep-alive reuse
+- `10 MB` response body limit for remote fetches
+- source map resolution when exposed assets reference them
+- prefix pre-filtering before expensive regex evaluation
+- deterministic result ordering across JSON, SARIF, and Markdown outputs
+
+At a high level:
+
+- [jjsecret.go](jjsecret.go) handles CLI, input orchestration, summaries, and outputs
+- [analysis.go](analysis.go) handles signatures, heuristics, normalization, and false-positive suppression
+- [signatures.go](signatures.go) contains the signature catalog
+- [nano.go](nano.go) handles fetching, transport setup, hashing, diagnostics, and source maps
+
+## Limitations
+
+`jsecret` is a static scanner. It does not execute JavaScript, emulate browser state, or prove exploitability.
+
+That means:
+
+- a finding may still need human validation
+- remote coverage depends on what the target actually serves
+- source map analysis only happens when the source map is referenced and retrievable
+- directory scans only consider the configured extensions
+
+These limits are intentional: the tool is built to be fast, portable, and easy to trust in CI and recon pipelines.
+
+## Development
+
+Requirements:
+
+- Go `1.21+`
+
+Common commands:
+
+```bash
+make verify
+make build
+make test
+make bench
+make cover
+make cross
+```
+
+Direct Go commands:
+
+```bash
+go test ./...
+go test -run=^$ -bench=. -benchmem ./...
+```
+
+## License
+
+This project is distributed under the license in [LICENSE](LICENSE).
 
 ---
-**Maintained by @jjardel-infosec**
+
+Maintained by `@jjardel-infosec`

@@ -106,7 +106,7 @@ func init() {
 		{"GitHub Actions Encrypted Value", `encrypted_value:\s*['"][a-zA-Z0-9+/=]{10,}['"]`, "HIGH", "encrypted_value"},
 		{"K8s Service Account Token", `eyJhbGciOiJSUzI1NiIsImtpZCI6`, "HIGH", "eyJhbGciOiJSUzI1NiIsImtpZCI6"},
 		{"Vault Token", `\bhvs\.[a-zA-Z0-9_-]{20,}`, "HIGH", "hvs."},
-		{"Vault Token (Legacy)", `\bs\.[a-zA-Z0-9]{24,}(?![a-zA-Z0-9_(.])`, "HIGH", ""},
+		{"Vault Token (Legacy)", `(?:^|[\s'";=])s\.[a-zA-Z0-9]{24,}(?![a-zA-Z0-9_(./])`, "HIGH", "s."},
 		{"Hashicorp Vault URL", `https:\/\/vault\.[a-z0-9\-_\.]+\.com`, "HIGH", "vault."},
 		{"CircleCI Token", `circle-token=[a-z0-9]{40}`, "HIGH", "circle-token="},
 		{"Travis CI Token", `(?i)travis(.{0,20})?token['"\s:=]+[a-z0-9]{30,}`, "HIGH", ""},
@@ -144,9 +144,9 @@ func init() {
 		{"Contentful API Key", `CFPAT-[a-zA-Z0-9_-]{43}`, "HIGH", "CFPAT-"},
 		{"Fly.io Token", `fo1_[a-zA-Z0-9_-]{40,}`, "HIGH", "fo1_"},
 		{"Deno Deploy Token", `ddp_[a-zA-Z0-9]{40}`, "HIGH", "ddp_"},
-		{"Resend API Key", `re_[a-zA-Z0-9]{20,}`, "HIGH", "re_"},
+		{"Resend API Key", `re_[a-zA-Z0-9]{30,}`, "HIGH", "re_"},
 		{"Trigger.dev API Key", `tr_[a-zA-Z0-9_]{20,}`, "HIGH", "tr_"},
-		{"Tinybird API Token", `p\.[a-zA-Z0-9]{20,}`, "HIGH", ""},
+		{"Tinybird API Token", `(?i)(?:tinybird|TINYBIRD_TOKEN|TB_TOKEN)\b[^\n]{0,40}[:=]\s*['"]p\.[a-zA-Z0-9]{20,}['"]`, "HIGH", "p."},
 		{"Arcjet API Key", `ajkey_[a-zA-Z0-9_-]{30,}`, "HIGH", "ajkey_"},
 		{"Expo Access Token", `expo_[a-zA-Z0-9]{20,}`, "HIGH", "expo_"},
 		{"Infisical Token", `st\.[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,}`, "HIGH", "st."},
@@ -254,6 +254,52 @@ func init() {
 		{"JWT in Local Storage", `localStorage\.setItem\(['"]token['"],\s*['"]eyJ[a-zA-Z0-9-_]+\.[a-zA-Z0-9-_]+\.[a-zA-Z0-9-_]+['"]\)`, "MEDIUM", "localStorage.setItem"},
 
 		// ═══════════════════════════════════════════════════════════════════
+		// 🎯 Bug Bounty Recon: URLs, Endpoints, Metadata, Cloud Storage
+		// ═══════════════════════════════════════════════════════════════════
+		{"Credentials in URL", `https?://[^\s'"]*:[^\s'"@]*@[^\s'"]+`, "CRITICAL", "://"},
+		{"Cloud Metadata Endpoint (AWS)", `169\.254\.169\.254`, "HIGH", "169.254.169.254"},
+		{"Cloud Metadata Endpoint (GCP)", `metadata\.google\.internal`, "HIGH", "metadata.google.internal"},
+		{"Cloud Metadata Endpoint (Azure)", `169\.254\.169\.254/metadata`, "HIGH", "169.254.169.254/metadata"},
+		{"AWS S3 Bucket URL (HTTP)", `https?://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]\.s3[.-](?:us|eu|ap|sa|ca|me|af|cn)-[a-z]+-\d\.amazonaws\.com`, "MEDIUM", ".s3"},
+		{"AWS S3 Bucket Path-Style", `https?://s3[.-](?:us|eu|ap|sa|ca|me|af|cn)-[a-z]+-\d\.amazonaws\.com/[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]`, "MEDIUM", "s3"},
+		{"GCS Bucket URL", `https?://storage\.googleapis\.com/[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]`, "MEDIUM", "storage.googleapis.com"},
+		{"Azure Blob Storage URL", `https?://[a-z0-9]{3,24}\.blob\.core\.windows\.net`, "MEDIUM", ".blob.core.windows.net"},
+		{"Exposed Swagger/OpenAPI", `(?i)(?:swagger-ui|swagger\.json|openapi\.json|api-docs|\/swagger\/|\/api\/docs|graphiql|\/graphql\/playground|altair|\/redoc)`, "MEDIUM", ""},
+		{"WebSocket URL with Token", `wss?://[^\s'"]*[\?&](?:token|key|auth|session|api_key)=[^\s'"&]+`, "MEDIUM", "ws"},
+		{"Internal Email Address", `[a-zA-Z0-9._%+-]+@(?:internal|corp|local|private|intra|dev)\.[a-zA-Z]{2,}`, "LOW", "@"},
+		{"Internal/Debug Path", `(?i)['"]\/(?:internal|debug|metrics|healthcheck|admin(?:istrator)?|actuator|_debug|__debug|phpinfo|server-(?:status|info)|elmah\.axd)(?:\/|['"])`, "MEDIUM", ""},
+		{"Hardcoded OIDC/OAuth Redirect URI", `(?i)redirect_uri['"\s:=]+https?://(?:localhost|127\.0\.0\.1)[:\d/]*`, "MEDIUM", "redirect_uri"},
+
+		// ═══════════════════════════════════════════════════════════════════
+		// 🤖 AI/ML Provider Keys (2025 additions)
+		// ═══════════════════════════════════════════════════════════════════
+		{"Google Gemini API Key", `(?i)(?:gemini|GEMINI_API_KEY)\b[^\n]{0,40}[:=]\s*['"]AIzaSy[a-zA-Z0-9_-]{33}['"]`, "CRITICAL", "AIzaSy"},
+		{"Cerebras API Key", `csk-[a-zA-Z0-9]{40,}`, "HIGH", "csk-"},
+		{"Sambanova API Key", `(?i)(?:sambanova|SAMBANOVA_API_KEY)\b[^\n]{0,40}[:=]\s*['"][a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}['"]`, "HIGH", "sambanova"},
+		{"Voyage AI Key", `pa-[a-zA-Z0-9_-]{40,}`, "HIGH", "pa-"},
+		{"AI21 Labs API Key", `(?i)(?:ai21|AI21_API_KEY)\b[^\n]{0,40}[:=]\s*['"][a-zA-Z0-9]{40,}['"]`, "HIGH", "ai21"},
+		{"Stability AI Key", `sk-[a-zA-Z0-9]{48,}`, "HIGH", "sk-"},
+		{"OpenRouter API Key", `sk-or-v1-[a-f0-9]{64}`, "HIGH", "sk-or-v1-"},
+		{"Langchain API Key", `ls__[a-f0-9]{32,}`, "HIGH", "ls__"},
+		{"Unify AI Key", `(?i)(?:unify|UNIFY_API_KEY)\b[^\n]{0,40}[:=]\s*['"][a-zA-Z0-9_-]{40,}['"]`, "HIGH", "unify"},
+
+		// ═══════════════════════════════════════════════════════════════════
+		// 🎯 Bug Bounty Recon: Infrastructure & Misconfiguration (Phase 7)
+		// ═══════════════════════════════════════════════════════════════════
+		{"LDAP Connection String", `ldaps?:\/\/[a-zA-Z0-9._:@\/-]+`, "MEDIUM", "ldap"},
+		{"Azure Service Bus Connection", `Endpoint=sb:\/\/[a-zA-Z0-9.-]+\.servicebus\.windows\.net`, "HIGH", "sb://"},
+		{"Azure SQL Connection String", `Server=tcp:[a-zA-Z0-9.-]+\.database\.windows\.net`, "HIGH", ".database.windows.net"},
+		{"AWS SQS Queue URL", `https:\/\/sqs\.[a-z0-9-]+\.amazonaws\.com\/\d{12}\/`, "MEDIUM", "sqs."},
+		{"AWS SNS Topic ARN", `arn:aws:sns:[a-z0-9-]+:\d{12}:[a-zA-Z0-9_-]+`, "MEDIUM", "arn:aws:sns:"},
+		{"GraphQL Endpoint", `(?i)['"]https?://[a-z0-9._-]+(?:/[a-z0-9._-]+)*/graphql['"]`, "LOW", "graphql"},
+		{"Spring Boot Actuator Endpoint", `(?i)['"](?:https?://[a-z0-9._-]+)?/actuator(?:/[a-z]+)?['"]`, "MEDIUM", "actuator"},
+		{"Admin Panel Path", `(?i)['"](?:https?://[a-z0-9._-]+)?/(?:admin|_admin|dashboard/admin|wp-admin|phpmyadmin)(?:/[a-z0-9_-]*)?['"]`, "LOW", "admin"},
+		{"Hardcoded Feature Flag", `(?i)(?:feature_flag|featureFlag|enableFeature|FEATURE_TOGGLE)['"\s:=]+['"]?(?:true|false|on|off|enabled|disabled)['"]?`, "LOW", ""},
+		{"Webhook Secret Key", `(?i)(?:webhook[_\s-]?secret|signing[_\s-]?secret|whsec_)['":\s=]+['"]?[a-zA-Z0-9_\-]{20,}['"]?`, "HIGH", ""},
+		{"Mapbox Secret Token", `sk\.eyJ[a-zA-Z0-9_-]{50,}`, "HIGH", "sk.eyJ"},
+		{"Twilio Account SID", `AC[a-f0-9]{32}`, "MEDIUM", "AC"},
+
+		// ═══════════════════════════════════════════════════════════════════
 		// 📉 LOW: Generic / Noise-prone detections
 		// ═══════════════════════════════════════════════════════════════════
 		{"AWS S3 Bucket URL", `s3:\/\/[a-z0-9\-\.]{3,63}`, "LOW", "s3://"},
@@ -265,10 +311,10 @@ func init() {
 		{"PEM File Content", `-----BEGIN CERTIFICATE-----`, "LOW", "-----BEGIN CERTIFICATE"},
 		{"Base64 High Entropy String", `['\"](?=[A-Za-z0-9+\/]{40,}={0,2}['\"])(?=[^'\"]*[+/=])[A-Za-z0-9+\/]{40,}={0,2}['\"]`, "LOW", ""},
 		{"API Key Generic Detector", `(?i)(apikey|api_key|secret|token)['"\s:=]+(?![a-zA-Z]\.[a-zA-Z])[a-zA-Z0-9\-_]{8,}`, "LOW", ""},
-		{"Bearer Token Generic", `(?i)authorization:\s*Bearer\s+[a-zA-Z0-9\-._~+/]+=*`, "LOW", ""},
+		{"Bearer Token Generic", `(?i)authorization:\s*Bearer\s+[a-zA-Z0-9\-._~+/=]{20,}`, "LOW", ""},
 		{"Session ID", `(?i)(sessionid|session_id)['"\s:=]+[a-zA-Z0-9]{10,}`, "LOW", ""},
-		{"Cookie Name Generic", `(?i)set-cookie:\s*[a-zA-Z0-9_-]+=`, "LOW", ""},
-		{"CSRF Token", `(?i)csrf(token)?['"\s:=]+[a-zA-Z0-9-_]{8,}`, "LOW", ""},
+		{"Cookie Name Generic", `(?i)set-cookie:\s*(?:session(?:id)?|sess(?:ion)?|auth(?:token)?|access[_-]?token|refresh[_-]?token|jwt|sid|connect\.sid)=`, "LOW", ""},
+		{"CSRF Token", `(?i)csrf(token)?['"\s:=]+\s*['"][A-Za-z0-9_-]{12,}['"]`, "LOW", ""},
 		{"JJARDEL (Legacy)", `(?:"?[a-z0-9_\-]*(?:key|secret|password|dependencies|auth|aws_secret|api|token)[a-z0-9_\-]*"?\s*(?::|=)\s*"?!(null|true|false)([a-z0-9+_:\.\-\/]+)|"Authorization":"[a-z0-9+:_\-\/]+\s(.*?(?<!\\)(?=")))`, "LOW", ""},
 		{"SEGREDOS WAR (Legacy)", `(('|")((?:ASIA|AKIA|AROA|AIDA)([A-Z0-9]{16}))('|").*?(\n^.*?){0,4}(('|")[a-zA-Z0-9+/]{40}('|"))+|('|")[a-zA-Z0-9+/]{40}('|").*?(\n^.*?){0,3}(('|")(?:ASIA|AKIA|AROA|AIDA)([A-Z0-9]{16})('|"))+)`, "LOW", ""},
 	}
