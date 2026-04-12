@@ -961,7 +961,7 @@ func writeSARIFOutput(path string, results []Result) {
 				Tool: SARIFTool{
 					Driver: SARIFDriver{
 						Name:           "jsecret",
-						Version:        "4.0.1",
+						Version:        "4.0.2",
 						InformationURI: "https://github.com/jjardel-infosec/jsecret",
 						Rules:          rules,
 					},
@@ -1059,6 +1059,6 @@ func printBanner() {
       | \__ \  __/ (__| | |  __/| |_ 
       | |___/\___|\___|_|  \___| \__|
      _/ |                            
-    |__/   v4.0.1 - @jjardel-infosec (Ultimate JS Security Scanner)
+    |__/   v4.0.2 - @jjardel-infosec (Ultimate JS Security Scanner)
 	`)
 }

@@ -1,7 +1,7 @@
 .PHONY: build test vet bench clean all cross cover verify
 
 BINARY = jsecret
-VERSION = 4.0.1
+VERSION = 4.0.2
 LDFLAGS = -ldflags="-s -w"
 
 all: vet test build

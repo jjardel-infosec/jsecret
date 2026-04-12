@@ -273,6 +273,46 @@ func TestFP_VendorDetection_SentryPack(t *testing.T) {
 	}
 }
 
+func TestFP_VendorDetection_HashedNames(t *testing.T) {
+	// Webpack content-hashed bundles with name.HASH.js format
+	cases := []string{
+		"booking.com/chat-window.c4140ec35644d7684bce.js",
+		"booking.com/5923.a949fe50bed968f9327a.js",
+		"booking.com/client.374869a4afb9a509b2fe.js",
+		"booking.com/index.f17af9eb.js",
+		"booking.com/1004b298.2b938b5a.chunk.js",
+	}
+	for _, path := range cases {
+		if !isLikelyVendorTarget(path) {
+			t.Errorf("content-hashed bundle %q should be detected as vendor target", path)
+		}
+	}
+}
+
+func TestFP_BundledContent_VarClientPrefix(t *testing.T) {
+	// Webpack bundle that prepends `var client;` before the IIFE arrow function
+	bundle := "var client;(()=>{var e={136:(e,t,r)=>{\"use strict\";t.FK=void 0;"
+	for len(bundle) < 6000 {
+		bundle += "e.exports=function(t){return t+1};"
+	}
+	bundle += "}})();"
+	if !isLikelyBundledContent(bundle) {
+		t.Error("webpack bundle with var-prefix before IIFE should be detected as bundled content")
+	}
+}
+
+func TestFP_AdminPathSuppressedOnVendor(t *testing.T) {
+	// Admin/debug path signatures should be suppressed in vendor/hashed files
+	content := `var routes = ["/admin/users", "/admin/migrate-to-cloud", "/internal/metrics"];`
+	// Hashed bundle file — should be treated as vendor
+	results := scanContent("booking.com/5923.a949fe50bed968f9327a.js", content)
+	for _, r := range results {
+		if r.Name == "Admin Panel Path" || r.Name == "Internal/Debug Path" {
+			t.Errorf("admin/debug path should be suppressed in vendor file: %s – %s", r.Name, r.Match)
+		}
+	}
+}
+
 func TestFP_MinifiedLineDetection(t *testing.T) {
 	// Build a 400-char line with semicolons every ~30 chars (typical minified ES5)
 	line := ""

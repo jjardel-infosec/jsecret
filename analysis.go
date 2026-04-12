@@ -97,6 +97,9 @@ var suppressedOnVendor = map[string]bool{
 	"API Key in Variable":        true,
 	"Session ID":                 true,
 	"CSRF Token":                 true,
+	// Frontend router definitions are not exposed server paths
+	"Admin Panel Path":   true,
+	"Internal/Debug Path": true,
 }
 
 // skipOnMinified lists sigs suppressed on minified lines to reduce noise
@@ -353,6 +356,8 @@ var (
 	// Vendor filename patterns (pre-compiled for hot path)
 	vendorHexFilePattern     = regexp.MustCompile(`^[a-f0-9]{8,}\.js$`)
 	vendorHexDashFilePattern = regexp.MustCompile(`^[a-f0-9]+-[a-f0-9]+\.js$`)
+	// Content-hashed webpack bundles: name.HASH.js or 1234.HASH.js (dot-separated hash)
+	vendorHashedDotPattern = regexp.MustCompile(`\.[a-f0-9]{8,}\.js$`)
 
 	// Phase 5: New heuristic detection patterns
 	corsOriginReflectPattern = regexp.MustCompile(`(?i)(?:Access-Control-Allow-Origin['"]?\s*[:=,]\s*(?:req\.headers\.origin|request\.headers\.origin|origin)|origin\s*:\s*(?:true|req\.headers\.origin))`)
@@ -1507,6 +1512,11 @@ func isLikelyVendorTarget(target string) bool {
 		return true
 	}
 
+	// Content-hashed bundles: anything ending in .<8+hexchars>.js  (e.g. chat-window.c4140ec3.js)
+	if vendorHashedDotPattern.MatchString(base) || vendorHashedDotPattern.MatchString(unixBase) {
+		return true
+	}
+
 	return false
 }
 
@@ -1649,10 +1659,16 @@ func isLikelyBundledContent(content string) bool {
 
 	newlines := strings.Count(content, "\n")
 
-	// Webpack 5 / generic IIFE bundles: few lines, large content, starts with IIFE
+	// Webpack 5 / generic IIFE bundles: few lines, large content, starts with IIFE.
+	// Some bundles start with a short var declaration before the IIFE
+	// (e.g. `var client;(()=>{...`) so we check within the first 300 chars.
 	if newlines < 10 && len(content) > 5000 {
 		trimmed := strings.TrimSpace(content)
-		if strings.HasPrefix(trimmed, "(()=>{") ||
+		first300 := content
+		if len(first300) > 300 {
+			first300 = content[:300]
+		}
+		if strings.Contains(first300, "(()=>{") ||
 			strings.HasPrefix(trimmed, "!function(") ||
 			strings.HasPrefix(trimmed, "(function(") {
 			return true
