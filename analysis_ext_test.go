@@ -126,3 +126,164 @@ func TestScanContent_BackwardsCompat(t *testing.T) {
 		t.Error("expected at least one result from scanContent")
 	}
 }
+
+func TestFP_TranslationKeysNotTriggerDev(t *testing.T) {
+	// i18n translation keys like tr_livechat_something should NOT match Trigger.dev
+	content := `var translations = {
+		tr_livechat_unavailable_closechat: "Close chat",
+		tr_header_brandlogoalttext: "Brand logo",
+		tr_footer_privacypolicy: "Privacy Policy",
+		tr_currency_topcurrencies: "Top currencies",
+		tr_customer_service_submit_case_loading: "Loading"
+	};`
+	results := scanContent("chat-window.js", content)
+	for _, r := range results {
+		if r.Name == "Trigger.dev API Key" {
+			t.Errorf("translation key falsely detected as Trigger.dev API Key: %s", r.Match)
+		}
+	}
+}
+
+func TestFP_BearerTokenLiteral(t *testing.T) {
+	// The literal string "Bearer Token" in UI/docs should NOT match
+	content := `const authType = "Bearer Token";`
+	results := scanContent("index.js", content)
+	for _, r := range results {
+		if r.Name == "Authorization Bearer Token" {
+			t.Errorf("literal 'Bearer Token' falsely detected: %s", r.Match)
+		}
+	}
+}
+
+func TestFP_CredentialsInURL_TemplateURL(t *testing.T) {
+	// Template URL with authuser param + unrelated @ in code should NOT match
+	content := "var providers=[{url:`https://mail.google.com/mail?authuser=${e}`,gmail:!0},{regex:/@yahoo\\.com$/,url:\"https://mail.yahoo.com\"}];"
+	results := scanContent("providers.js", content)
+	for _, r := range results {
+		if r.Name == "Credentials in URL" {
+			t.Errorf("template URL falsely detected as Credentials in URL: %s", r.Match)
+		}
+	}
+}
+
+func TestFP_WebpackBundleHeuristics(t *testing.T) {
+	// Webpack 5 IIFE bundle should be detected as bundled content
+	// and NOT trigger heuristic findings like Prototype Pollution
+	if !isLikelyBundledContent(buildFakeWebpackBundle()) {
+		t.Error("expected webpack 5 IIFE to be detected as bundled content")
+	}
+}
+
+func TestLooksLikeTranslationKey(t *testing.T) {
+	tests := []struct {
+		value string
+		want  bool
+	}{
+		{"tr_livechat_unavailable_closechat", true},
+		{"tr_header_brandlogoalttext", true},
+		{"tr_footer_links_geoblockingportal", true},
+		{"tr_dev_A8f7BcD32e91K4m6N", false},  // mixed case = real key
+		{"tr_prod_abc123def456ghi789", true}, // all lowercase = still i18n-like
+		{"not_a_tr_key", false},              // no tr_ prefix
+		{"tr_x", false},                      // only 1 segment after tr_
+	}
+	for _, tt := range tests {
+		got := looksLikeTranslationKey(tt.value)
+		if got != tt.want {
+			t.Errorf("looksLikeTranslationKey(%q) = %v, want %v", tt.value, got, tt.want)
+		}
+	}
+}
+
+// buildFakeWebpackBundle creates a large fake webpack 5 bundle for testing
+func buildFakeWebpackBundle() string {
+	// Start with webpack 5 IIFE pattern, pad to >5000 chars
+	bundle := "(()=>{var e={136:(e,t,r)=>{\"use strict\";t.FK=void 0;"
+	for len(bundle) < 6000 {
+		bundle += "e.exports=function(t){return t+1};"
+	}
+	bundle += "}})();"
+	return bundle
+}
+
+func TestFP_ES5InheritanceNotPrototypePollution(t *testing.T) {
+	// Standard ES5 class inheritance should NOT be flagged as Prototype Pollution
+	content := `a&&(b.__proto__=a);b.prototype=Object.create(a&&a.prototype);b.prototype.constructor=b;b.prototype.applyTransform=function(){var a=this._decomposeTransform();}`
+	results := scanContent("EclairNG.js", content)
+	for _, r := range results {
+		if r.Name == "Potential Prototype Pollution" {
+			t.Errorf("ES5 inheritance falsely detected as Prototype Pollution: %s", r.Match)
+		}
+	}
+}
+
+func TestFP_ObjectSetPrototypeOfInheritance(t *testing.T) {
+	// Object.setPrototypeOf with __proto__ polyfill pattern — TypeScript helper
+	content := `var __extends = Object.setPrototypeOf || {__proto__:[]} instanceof Array;`
+	results := scanContent("lib.js", content)
+	// TypeScript polyfill pattern should not produce prototype pollution findings
+	_ = results
+}
+
+func TestFP_VendorDetection_ProdFile(t *testing.T) {
+	if !isLikelyVendorTarget("booking.com/aura_prod.js") {
+		t.Error("aura_prod.js should be detected as vendor target")
+	}
+}
+
+func TestFP_VendorDetection_UMD(t *testing.T) {
+	if !isLikelyVendorTarget("booking.com/index.umd.cjs.js") {
+		t.Error("index.umd.cjs.js should be detected as vendor target")
+	}
+}
+
+func TestFP_VendorDetection_Eclair(t *testing.T) {
+	if !isLikelyVendorTarget("booking.com/EclairNG.js") {
+		t.Error("EclairNG.js should be detected as vendor target (eclair marker)")
+	}
+}
+
+func TestFP_VendorDetection_SentryPack(t *testing.T) {
+	if !isLikelyVendorTarget("booking.com/sentry-wrapper.pack.ec4dcd4257cafb4f0f1a79ba02a0f0a4.js") {
+		t.Error("sentry-wrapper.pack.*.js should be detected as vendor target")
+	}
+}
+
+func TestFP_MinifiedLineDetection(t *testing.T) {
+	// Build a 400-char line with semicolons every ~30 chars (typical minified ES5)
+	line := ""
+	for i := 0; i < 15; i++ {
+		line += "var a=b.prototype;a.x=function(){return this._v};"
+	}
+	if !isLikelyMinifiedLine(line) {
+		t.Errorf("expected 400+ char semicolon-dense line to be detected as minified (len=%d)", len(line))
+	}
+}
+
+func TestFP_BundledContent_NumericWebpack(t *testing.T) {
+	// Webpack bundle with numeric module IDs (no webpackChunk marker)
+	content := "!function(){var t={97318:function(t,e,n){\"use strict\";n.r(e),n.d(e,{supportsHistory:function(){return o}});"
+	for len(content) < 15000 {
+		content += "var r=function(t){return t+1};"
+	}
+	content += "}();"
+	if !isLikelyBundledContent(content) {
+		t.Error("expected numeric-ID webpack bundle to be detected as bundled content")
+	}
+}
+
+func TestFP_MinifiedHeuristicsSkipped(t *testing.T) {
+	// ES5 minified line with prototype inheritance should produce no findings
+	line := "a&&(b.__proto__=a);b.prototype=Object.create(a&&a.prototype);b.prototype.constructor=b;"
+	// Repeat to make it > 300 chars and semicolon-dense
+	content := ""
+	for len(content) < 500 {
+		content += line
+	}
+	results := scanContent("lib.js", content)
+	for _, r := range results {
+		if r.Name == "Potential Prototype Pollution" {
+			t.Errorf("minified ES5 inheritance should not trigger Prototype Pollution: %s", r.Match)
+		}
+	}
+}

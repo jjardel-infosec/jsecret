@@ -208,6 +208,39 @@ func trimLiteralValue(value string) string {
 	return strings.Trim(strings.TrimSpace(value), `'"`+"`")
 }
 
+// looksLikeTranslationKey returns true if value looks like an i18n key (tr_word_word_word)
+// rather than a real API key (tr_dev_A8f7BcD32e91K4m6N)
+func looksLikeTranslationKey(value string) bool {
+	v := trimLiteralValue(value)
+	lower := strings.ToLower(v)
+	stripped := strings.TrimPrefix(lower, "tr_")
+	if stripped == lower {
+		return false
+	}
+	// Real API keys contain uppercase letters; translation keys don't
+	origStripped := v[3:] // skip "tr_" or "TR_" etc.
+	for _, r := range origStripped {
+		if r >= 'A' && r <= 'Z' {
+			return false
+		}
+	}
+	parts := strings.Split(stripped, "_")
+	if len(parts) < 2 {
+		return false
+	}
+	for _, p := range parts {
+		if p == "" {
+			continue
+		}
+		for _, r := range p {
+			if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func normalizeMatchedValue(match string) string {
 	if quoted := extractQuotedValue(match); quoted != "" {
 		return trimLiteralValue(quoted)
@@ -306,7 +339,10 @@ var (
 	corsWildcardPattern         = regexp.MustCompile(`(?is)cors\s*\(\s*{[^}]*origin\s*:\s*['"]\*['"][^}]*credentials\s*:\s*true`)
 	manualCorsPattern           = regexp.MustCompile(`(?is)Access-Control-Allow-Origin['"]?\s*[:=,]\s*['"]\*['"][\s\S]{0,200}Access-Control-Allow-Credentials['"]?\s*[:=,]\s*true`)
 	// Security heuristics
-	prototypePollutionPattern  = regexp.MustCompile(`(?i)(?:__proto__\s*[:=]|\[['"]__proto__['"]\]\s*=|constructor\s*\.\s*prototype\s*[:=]|Object\.setPrototypeOf\s*\(|Reflect\.setPrototypeOf\s*\()`)
+	// Prototype pollution: bracket-access __proto__, or setPrototypeOf (not standard inheritance)
+	prototypePollutionPattern = regexp.MustCompile(`(?i)(?:\[['"]__proto__['"]\]\s*=|Object\.setPrototypeOf\s*\(|Reflect\.setPrototypeOf\s*\()`)
+	// ES5 standard inheritance: b.__proto__ = a; b.prototype = Object.create(a.prototype); .prototype.constructor = b
+	es5InheritancePattern      = regexp.MustCompile(`(?:__proto__\s*=\s*[a-zA-Z_$][a-zA-Z0-9_$]*\s*[;,)\]}]|\.prototype\s*=\s*Object\.create\s*\(|\.prototype\.constructor\s*=\s*[a-zA-Z_$])`)
 	templateInjectionPattern   = regexp.MustCompile(`(?i)(?:\{\{\s*[^}]*\s*\}\}|<%[^%]*%>|\$\{[^}]*\}.*render|nunjucks\.render|ejs\.render|pug\.render|handlebars\.compile|Mustache\.render)`)
 	insecureDeserializePattern = regexp.MustCompile(`(?i)(?:unserialize\s*\(|pickle\.loads?\s*\(|yaml\.(?:load|unsafe_load)\s*\(|JSON\.parse\s*\([^)]*(?:localStorage|sessionStorage|req\.|request\.)|deserialize\s*\([^)]*(?:body|params|query))`)
 	objectMergePattern         = regexp.MustCompile(`(?i)(?:Object\.assign\s*\([^,]*,\s*(?:req\.|request\.|params|body|query)|_\.merge\s*\(|lodash\.merge\s*\(|\$\.extend\s*\(true|deepmerge\s*\()`)
@@ -623,6 +659,11 @@ func collectSignatureFindings(target, content string, addLine func(name, priorit
 				}
 			}
 
+			// Filter i18n translation keys that look like tr_word_word_word
+			if sig.Name == "Trigger.dev API Key" && looksLikeTranslationKey(value) {
+				continue
+			}
+
 			addLine(sig.Name, sig.Priority, match, lineNum)
 		}
 	}
@@ -742,7 +783,7 @@ func collectHeuristicFindings(target, content string, add func(name, priority, m
 		}
 
 		if strings.Contains(text, "__proto__") || strings.Contains(text, "prototype") {
-			if prototypePollutionPattern.MatchString(text) {
+			if prototypePollutionPattern.MatchString(text) && !es5InheritancePattern.MatchString(text) {
 				add("Potential Prototype Pollution", "HIGH", formatLineEvidence(line.Number, text))
 			}
 		}
@@ -1426,10 +1467,12 @@ var vendorExactBasenames = map[string]bool{
 // vendorSubstringMarkers are substrings checked anywhere in the path
 var vendorSubstringMarkers = []string{
 	".min.js", ".chunk.js", ".xhtml.js",
+	".umd.js", ".umd.cjs", ".pack.", "_prod.js", "_prod_",
 	"jquery", "bootstrap", "react", "vue", "redux",
 	"moment", "modernizr", "datatables", "fitvids",
 	"migrate", "bxslider", "i18next", "richfaces",
 	"chart", "vendor", "bundle", "chunk", "node_modules",
+	"eclair", "aura_", "sentry", "polyfill",
 }
 
 func isLikelyVendorTarget(target string) bool {
@@ -1469,19 +1512,34 @@ func isLikelyVendorTarget(target string) bool {
 
 func isLikelyMinifiedLine(line string) bool {
 	l := len(line)
-	if l < 600 {
+	if l < 300 {
 		return false
 	}
 
 	spaces := 0
+	semis := 0
 	for i := 0; i < l; i++ {
-		if line[i] == ' ' || line[i] == '\t' {
+		switch line[i] {
+		case ' ', '\t':
 			spaces++
+		case ';':
+			semis++
 		}
 	}
 
-	// spaces/len < 0.02  ⇒  spaces*50 < len (avoids float division)
-	return spaces*50 < l
+	// Primary: whitespace ratio < 8%  (spaces*12 < len avoids float)
+	if spaces*12 < l {
+		return true
+	}
+
+	// Secondary: high semicolon density (>1 per 40 chars) on long lines indicates minified code
+	// ES5 minified code like EclairNG has many `var` keywords that inflate whitespace,
+	// but also has very high semicolon density from statement concatenation.
+	if l >= 400 && semis*40 > l {
+		return true
+	}
+
+	return false
 }
 
 func isHexString(value string) bool {
@@ -1586,6 +1644,31 @@ func isLikelyBundledContent(content string) bool {
 	if strings.Contains(content, "parcelRequire") ||
 		strings.Contains(content, "__rollupBundleStart") ||
 		strings.Contains(content, "__esbuild_") {
+		return true
+	}
+
+	newlines := strings.Count(content, "\n")
+
+	// Webpack 5 / generic IIFE bundles: few lines, large content, starts with IIFE
+	if newlines < 10 && len(content) > 5000 {
+		trimmed := strings.TrimSpace(content)
+		if strings.HasPrefix(trimmed, "(()=>{") ||
+			strings.HasPrefix(trimmed, "!function(") ||
+			strings.HasPrefix(trimmed, "(function(") {
+			return true
+		}
+	}
+
+	// Webpack numeric-ID module pattern: !function(){var X={DIGITS:function(
+	if newlines < 10 && len(content) > 10000 {
+		if strings.Contains(content[:min(500, len(content))], "function(t,e,n){") ||
+			strings.Contains(content[:min(500, len(content))], "function(e,t,r){") {
+			return true
+		}
+	}
+
+	// UMD wrapper pattern in large content
+	if len(content) > 20000 && strings.Contains(content[:min(200, len(content))], "(function(root") {
 		return true
 	}
 

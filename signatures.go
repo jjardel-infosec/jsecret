@@ -145,7 +145,7 @@ func init() {
 		{"Fly.io Token", `fo1_[a-zA-Z0-9_-]{40,}`, "HIGH", "fo1_"},
 		{"Deno Deploy Token", `ddp_[a-zA-Z0-9]{40}`, "HIGH", "ddp_"},
 		{"Resend API Key", `re_[a-zA-Z0-9]{30,}`, "HIGH", "re_"},
-		{"Trigger.dev API Key", `tr_[a-zA-Z0-9_]{20,}`, "HIGH", "tr_"},
+		{"Trigger.dev API Key", `tr_(?:dev|prod|live|test|stg)_[a-zA-Z0-9]{16,}`, "HIGH", "tr_"},
 		{"Tinybird API Token", `(?i)(?:tinybird|TINYBIRD_TOKEN|TB_TOKEN)\b[^\n]{0,40}[:=]\s*['"]p\.[a-zA-Z0-9]{20,}['"]`, "HIGH", "p."},
 		{"Arcjet API Key", `ajkey_[a-zA-Z0-9_-]{30,}`, "HIGH", "ajkey_"},
 		{"Expo Access Token", `expo_[a-zA-Z0-9]{20,}`, "HIGH", "expo_"},
@@ -228,7 +228,7 @@ func init() {
 		{"Microsoft Teams Webhook", `https:\/\/[a-z]+\.webhook\.office\.com\/webhookb2\/[a-zA-Z0-9@\-]+\/.*`, "MEDIUM", "webhook.office.com"},
 		{"API Key in Variable", `(?i)(api[_-]?key)['"\s:=]+(?![a-zA-Z]\.[a-zA-Z])[a-zA-Z0-9\-_]{8,100}`, "MEDIUM", ""},
 		{"Secret in Variable", `(?i)(secret|token)['"\s:=]+(?![a-zA-Z]\.[a-zA-Z])[a-zA-Z0-9\-_]{8,100}`, "MEDIUM", ""},
-		{"Authorization Bearer Token", `Bearer\s+[a-zA-Z0-9\-._~+/]+=*`, "MEDIUM", "Bearer"},
+		{"Authorization Bearer Token", `Bearer\s+[a-zA-Z0-9\-._~+/]{20,}=*`, "MEDIUM", "Bearer"},
 		{"Cloudinary URL", `cloudinary:\/\/[0-9]{15}:[a-zA-Z0-9]+@[a-zA-Z]+`, "MEDIUM", "cloudinary://"},
 		{"Segment API Key", `(?i)segment(.{0,20})?key['"\s:=]+[a-zA-Z0-9]{10,}`, "MEDIUM", ""},
 		{"Intercom Access Token", `(?i)intercom(.{0,20})?token['"\s:=]+[a-zA-Z0-9-_]{20,}`, "MEDIUM", ""},
@@ -256,7 +256,7 @@ func init() {
 		// ═══════════════════════════════════════════════════════════════════
 		// 🎯 Bug Bounty Recon: URLs, Endpoints, Metadata, Cloud Storage
 		// ═══════════════════════════════════════════════════════════════════
-		{"Credentials in URL", `https?://[^\s'"]*:[^\s'"@]*@[^\s'"]+`, "CRITICAL", "://"},
+		{"Credentials in URL", `https?://[^\s'"/:@]+:[^\s'"@]{3,100}@[^\s'"]+`, "CRITICAL", "://"},
 		{"Cloud Metadata Endpoint (AWS)", `169\.254\.169\.254`, "HIGH", "169.254.169.254"},
 		{"Cloud Metadata Endpoint (GCP)", `metadata\.google\.internal`, "HIGH", "metadata.google.internal"},
 		{"Cloud Metadata Endpoint (Azure)", `169\.254\.169\.254/metadata`, "HIGH", "169.254.169.254/metadata"},
