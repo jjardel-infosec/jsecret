@@ -18,6 +18,8 @@ import (
 	"time"
 )
 
+const VERSION = "4.0.3"
+
 // loadIgnorePatterns reads a .jsecretignore file and returns the patterns (glob-style).
 // Blank lines and lines starting with '#' are skipped.
 func loadIgnorePatterns(root string) []string {
@@ -434,6 +436,7 @@ func main() {
 	var silentFlag bool
 	var strictFlag bool
 	var insecureTLSFlag bool
+	var versionFlag bool
 
 	flag.StringVar(&urlFlag, "u", "", "Single URL to scan")
 	flag.StringVar(&fileFlag, "f", "", "File containing list of URLs")
@@ -448,6 +451,7 @@ func main() {
 	flag.IntVar(&concurrency, "t", 50, "Number of concurrent threads")
 	flag.BoolVar(&helpFlag, "h", false, "Show help message")
 	flag.BoolVar(&silentFlag, "s", false, "Silent mode (no banner, summary, or fetch warnings)")
+	flag.BoolVar(&versionFlag, "version", false, "Show version and exit")
 	var mdFlag string
 	flag.StringVar(&mdFlag, "md", "", "Output file to save results (Markdown bug bounty report)")
 	flag.BoolVar(&strictFlag, "strict", false, "Exit with code 1 if CRITICAL or HIGH findings are found")
@@ -484,6 +488,11 @@ func main() {
 	}
 
 	flag.Parse()
+
+	if versionFlag {
+		fmt.Printf("jsecret %s\n", VERSION)
+		os.Exit(0)
+	}
 
 	if helpFlag {
 		flag.Usage()
@@ -961,7 +970,7 @@ func writeSARIFOutput(path string, results []Result) {
 				Tool: SARIFTool{
 					Driver: SARIFDriver{
 						Name:           "jsecret",
-						Version:        "4.0.3",
+						Version:        VERSION,
 						InformationURI: "https://github.com/jjardel-infosec/jsecret",
 						Rules:          rules,
 					},
