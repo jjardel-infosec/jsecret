@@ -21,10 +21,16 @@ import (
 const maxBodySize = 10 * 1024 * 1024
 
 type Result struct {
-	Target   string
-	Name     string
-	Match    string
-	Priority string
+	Target     string
+	Name       string
+	Match      string
+	Priority   string
+	Line       int      // 1-based line number (0 = unknown)
+	Confidence int      // 0–100 dynamic confidence score
+	Provider   string   // identified provider (aws, stripe, github, etc.)
+	Tags       []string // classification tags (auth-related, third-party, etc.)
+	Entropy    float64  // Shannon entropy of matched value
+	Context    string   // surrounding code snippet (±2 lines)
 }
 
 // Shared HTTP client with connection pooling (created once, reused by all workers)
@@ -39,6 +45,7 @@ var (
 	diagnosticsEnabled bool
 	diagnosticWriter   io.Writer = os.Stderr
 	diagnosticWarnings sync.Map
+	scanContextLines   int // set by CLI before workers start
 )
 
 func configureDiagnostics(enabled bool) {
@@ -139,7 +146,7 @@ func matcher(target string, results chan<- Result) {
 		return // Já escaneamos esse mesmo conteúdo/arquivo anteriormente!
 	}
 
-	for _, result := range scanContent(target, content) {
+	for _, result := range scanContentWithOptions(target, content, scanContextLines) {
 		results <- result
 	}
 

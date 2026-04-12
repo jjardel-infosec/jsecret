@@ -331,12 +331,17 @@ func summarizeResults(results []Result) ScanStats {
 
 // JSONResult is the structured output for -json flag
 type JSONResult struct {
-	Target   string `json:"target"`
-	Priority string `json:"priority"`
-	Finding  string `json:"finding"`
-	Evidence string `json:"evidence"`
-	Category string `json:"category"`
-	Line     int    `json:"line,omitempty"`
+	Target     string   `json:"target"`
+	Priority   string   `json:"priority"`
+	Finding    string   `json:"finding"`
+	Evidence   string   `json:"evidence"`
+	Category   string   `json:"category"`
+	Line       int      `json:"line,omitempty"`
+	Confidence int      `json:"confidence"`
+	Provider   string   `json:"provider,omitempty"`
+	Tags       []string `json:"tags,omitempty"`
+	Entropy    float64  `json:"entropy,omitempty"`
+	Context    string   `json:"context,omitempty"`
 }
 
 // SARIFLog is the top-level SARIF v2.1.0 structure
@@ -448,6 +453,16 @@ func main() {
 	flag.BoolVar(&strictFlag, "strict", false, "Exit with code 1 if CRITICAL or HIGH findings are found")
 	flag.BoolVar(&insecureTLSFlag, "k", false, "Skip TLS certificate verification for HTTPS requests")
 
+	// v4.0 flags
+	var confidenceMin int
+	var providersFilter string
+	var tagsFilter string
+	var contextLines int
+	flag.IntVar(&confidenceMin, "confidence-min", 0, "Minimum confidence score (0-100) to report findings")
+	flag.StringVar(&providersFilter, "providers", "", "Comma-separated list of providers to include (e.g., aws,github,stripe)")
+	flag.StringVar(&tagsFilter, "tags", "", "Comma-separated list of tags to include (e.g., auth-related,third-party)")
+	flag.IntVar(&contextLines, "context", 0, "Number of surrounding code lines to include (0-10)")
+
 	// Custom usage message
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
@@ -461,7 +476,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  jsecret -d . -min HIGH -strict\n")
 		fmt.Fprintf(os.Stderr, "  jsecret -f urls.txt -sarif report.sarif\n")
 		fmt.Fprintf(os.Stderr, "  jsecret -d . -ext .js,.ts,.jsx,.vue\n")
-		fmt.Fprintf(os.Stderr, "  jsecret -u https://example.com/app.js -proxy http://127.0.0.1:8080\n\n")
+		fmt.Fprintf(os.Stderr, "  jsecret -u https://example.com/app.js -proxy http://127.0.0.1:8080\n")
+		fmt.Fprintf(os.Stderr, "  jsecret -d . -confidence-min 70 -providers aws,github\n")
+		fmt.Fprintf(os.Stderr, "  jsecret -d . -tags auth-related -context 3\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		flag.PrintDefaults()
 	}
@@ -504,6 +521,35 @@ func main() {
 		}
 	}
 
+	// Parse v4.0 filters
+	if contextLines < 0 {
+		contextLines = 0
+	} else if contextLines > 10 {
+		contextLines = 10
+	}
+
+	var providerSet map[string]bool
+	if providersFilter != "" {
+		providerSet = make(map[string]bool)
+		for _, p := range strings.Split(providersFilter, ",") {
+			p = strings.TrimSpace(strings.ToLower(p))
+			if p != "" {
+				providerSet[p] = true
+			}
+		}
+	}
+
+	var tagSet map[string]bool
+	if tagsFilter != "" {
+		tagSet = make(map[string]bool)
+		for _, t := range strings.Split(tagsFilter, ",") {
+			t = strings.TrimSpace(strings.ToLower(t))
+			if t != "" {
+				tagSet[t] = true
+			}
+		}
+	}
+
 	// Parse custom extensions
 	scanExtensions := defaultExtensions
 	if extFlag != "" {
@@ -540,6 +586,9 @@ func main() {
 	// Counters for summary statistics
 	var filesScanned int64
 	var criticalCount, highCount, mediumCount, lowCount int64
+
+	// Set context lines for scanContentWithOptions
+	scanContextLines = contextLines
 
 	// Worker pool setup
 	var wg sync.WaitGroup
@@ -580,7 +629,7 @@ func main() {
 				defer csvWriter.Flush()
 
 				// Write Header
-				csvWriter.Write([]string{"Target", "Priority", "Finding Type", "Evidence"})
+				csvWriter.Write([]string{"Target", "Priority", "Finding Type", "Evidence", "Confidence", "Provider", "Line"})
 			}
 		}
 
@@ -589,6 +638,30 @@ func main() {
 			if minLevel > 0 {
 				resLevel := priorityLevels[res.Priority]
 				if resLevel < minLevel {
+					continue
+				}
+			}
+
+			// Apply confidence filter
+			if confidenceMin > 0 && res.Confidence < confidenceMin {
+				continue
+			}
+
+			// Apply provider filter
+			if providerSet != nil && !providerSet[strings.ToLower(res.Provider)] {
+				continue
+			}
+
+			// Apply tag filter
+			if tagSet != nil {
+				matched := false
+				for _, t := range res.Tags {
+					if tagSet[strings.ToLower(t)] {
+						matched = true
+						break
+					}
+				}
+				if !matched {
 					continue
 				}
 			}
@@ -637,7 +710,11 @@ func main() {
 
 			// CSV Output
 			if csvWriter != nil {
-				csvWriter.Write([]string{res.Target, res.Priority, res.Name, res.Match})
+				lineStr := ""
+				if res.Line > 0 {
+					lineStr = strconv.Itoa(res.Line)
+				}
+				csvWriter.Write([]string{res.Target, res.Priority, res.Name, res.Match, strconv.Itoa(res.Confidence), res.Provider, lineStr})
 			}
 		}
 	}()
@@ -804,17 +881,22 @@ func writeJSONOutput(path string, results []Result) {
 	jsonResults := make([]JSONResult, 0, len(results))
 	for _, r := range results {
 		category := resultCategory(r)
-		lineNum := 0
-		if category == "heuristic" {
+		lineNum := r.Line
+		if lineNum == 0 && category == "heuristic" {
 			lineNum = extractLineNumber(r.Match)
 		}
 		jsonResults = append(jsonResults, JSONResult{
-			Target:   r.Target,
-			Priority: r.Priority,
-			Finding:  r.Name,
-			Evidence: r.Match,
-			Category: category,
-			Line:     lineNum,
+			Target:     r.Target,
+			Priority:   r.Priority,
+			Finding:    r.Name,
+			Evidence:   r.Match,
+			Category:   category,
+			Line:       lineNum,
+			Confidence: r.Confidence,
+			Provider:   r.Provider,
+			Tags:       r.Tags,
+			Entropy:    r.Entropy,
+			Context:    r.Context,
 		})
 	}
 
@@ -851,16 +933,20 @@ func writeSARIFOutput(path string, results []Result) {
 		sr := SARIFResult{
 			RuleID:  ruleID,
 			Level:   sarifLevel(r.Priority),
-			Message: SARIFMessage{Text: r.Match},
+			Message: SARIFMessage{Text: fmt.Sprintf("[confidence:%d] %s", r.Confidence, r.Match)},
 		}
 		if r.Target != "" {
+			lineNum := r.Line
+			if lineNum == 0 {
+				lineNum = extractLineNumber(r.Match)
+			}
 			loc := SARIFLocation{
 				PhysicalLocation: SARIFPhysicalLocation{
 					ArtifactLocation: SARIFArtifactLocation{URI: r.Target},
 				},
 			}
-			if ln := extractLineNumber(r.Match); ln > 0 {
-				loc.PhysicalLocation.Region = &SARIFRegion{StartLine: ln}
+			if lineNum > 0 {
+				loc.PhysicalLocation.Region = &SARIFRegion{StartLine: lineNum}
 			}
 			sr.Locations = []SARIFLocation{loc}
 		}
@@ -875,7 +961,7 @@ func writeSARIFOutput(path string, results []Result) {
 				Tool: SARIFTool{
 					Driver: SARIFDriver{
 						Name:           "jsecret",
-						Version:        "3.3.0",
+						Version:        "4.0.0",
 						InformationURI: "https://github.com/jjardel-infosec/jsecret",
 						Rules:          rules,
 					},
@@ -941,11 +1027,18 @@ func writeMarkdownOutput(path string, results []Result) {
 		for _, targetGroup := range group.Targets {
 			sb.WriteString(fmt.Sprintf("### `%s`\n\n", targetGroup.Target))
 			for _, r := range targetGroup.Results {
-				ln := extractLineNumber(r.Match)
+				ln := r.Line
+				if ln == 0 {
+					ln = extractLineNumber(r.Match)
+				}
+				label := r.Name
+				if r.Provider != "" {
+					label = fmt.Sprintf("%s [%s]", r.Name, r.Provider)
+				}
 				if ln > 0 {
-					sb.WriteString(fmt.Sprintf("- **%s** (line %d)\n", r.Name, ln))
+					sb.WriteString(fmt.Sprintf("- **%s** (line %d, confidence: %d%%)\n", label, ln, r.Confidence))
 				} else {
-					sb.WriteString(fmt.Sprintf("- **%s**\n", r.Name))
+					sb.WriteString(fmt.Sprintf("- **%s** (confidence: %d%%)\n", label, r.Confidence))
 				}
 				sb.WriteString(fmt.Sprintf("  > `%s`\n\n", r.Match))
 			}
@@ -966,6 +1059,6 @@ func printBanner() {
       | \__ \  __/ (__| | |  __/| |_ 
       | |___/\___|\___|_|  \___| \__|
      _/ |                            
-    |__/   v3.3 - @jjardel-infosec (Ultimate JS Security Scanner)
+    |__/   v4.0 - @jjardel-infosec (Ultimate JS Security Scanner)
 	`)
 }

@@ -10,9 +10,11 @@ import (
 )
 
 type resultCollector struct {
-	target  string
-	seen    map[string]struct{}
-	results []Result
+	target       string
+	content      string
+	contextLines int
+	seen         map[string]struct{}
+	results      []Result
 }
 
 // knownSafeStrings contains hashes/strings that commonly appear in code but are not secrets
@@ -351,13 +353,19 @@ var (
 )
 
 func scanContent(target, content string) []Result {
+	return scanContentWithOptions(target, content, 0)
+}
+
+func scanContentWithOptions(target, content string, contextLines int) []Result {
 	collector := resultCollector{
-		target: target,
-		seen:   make(map[string]struct{}),
+		target:       target,
+		content:      content,
+		contextLines: contextLines,
+		seen:         make(map[string]struct{}),
 	}
 
-	collectSignatureFindings(target, content, collector.add)
-	collectHeuristicFindings(target, content, collector.add)
+	collectSignatureFindings(target, content, collector.addWithLine)
+	collectHeuristicFindings(target, content, collector.addHeuristicEvidence)
 
 	return collector.results
 }
@@ -427,6 +435,17 @@ var suppressedOnTestFiles = map[string]bool{
 }
 
 func (c *resultCollector) add(name, priority, match string) {
+	c.addWithLine(name, priority, match, 0)
+}
+
+// addHeuristicEvidence is used by collectHeuristicFindings. It extracts the line
+// number from "line N: ..." evidence format.
+func (c *resultCollector) addHeuristicEvidence(name, priority, match string) {
+	line := extractLineNumberFromEvidence(match)
+	c.addWithLine(name, priority, match, line)
+}
+
+func (c *resultCollector) addWithLine(name, priority, match string, line int) {
 	cleanMatch := normalizeFinding(match)
 	if cleanMatch == "" {
 		return
@@ -438,12 +457,18 @@ func (c *resultCollector) add(name, priority, match string) {
 	}
 
 	c.seen[key] = struct{}{}
-	c.results = append(c.results, Result{
+	r := Result{
 		Target:   c.target,
 		Name:     name,
 		Match:    cleanMatch,
 		Priority: priority,
-	})
+		Line:     line,
+	}
+
+	// Enrich with provider, tags, confidence, context
+	enrichResult(&r, c.content, c.target, c.contextLines)
+
+	c.results = append(c.results, r)
 }
 
 // passwordNonSecretValues are common non-secret values assigned to password fields
@@ -468,11 +493,14 @@ var genericSignatures = map[string]bool{
 	"Loggly Token":             true,
 }
 
-func collectSignatureFindings(target, content string, add func(name, priority, match string)) {
+func collectSignatureFindings(target, content string, addLine func(name, priority, match string, line int)) {
 	vendorTarget := isLikelyVendorTarget(target)
 	testTarget := isLikelyTestOrMockFile(target)
 	envExample := isLikelyEnvExample(target)
 	isMinified := strings.Count(content, "\n") < 8 && len(content) > 6000
+
+	// Build line offset index for efficient line-number lookup
+	lineOffsets := buildLineOffsets(content)
 
 	for _, sig := range Signatures {
 		if vendorTarget && suppressedOnVendor[sig.Name] {
@@ -499,8 +527,11 @@ func collectSignatureFindings(target, content string, add func(name, priority, m
 			continue
 		}
 
-		matches := sig.Regex.FindAllString(content, 50)
-		for _, match := range matches {
+		matches := sig.Regex.FindAllStringIndex(content, 50)
+		for _, loc := range matches {
+			match := content[loc[0]:loc[1]]
+			lineNum := offsetToLine(lineOffsets, loc[0])
+			_ = lineNum // used by addSigWithLine below
 			value := normalizeMatchedValue(match)
 			normalizedValue := strings.ToLower(value)
 
@@ -592,7 +623,7 @@ func collectSignatureFindings(target, content string, add func(name, priority, m
 				}
 			}
 
-			add(sig.Name, sig.Priority, match)
+			addLine(sig.Name, sig.Priority, match, lineNum)
 		}
 	}
 }
@@ -1559,4 +1590,52 @@ func isLikelyBundledContent(content string) bool {
 	}
 
 	return false
+}
+
+// buildLineOffsets returns a slice where offsets[i] is the byte offset of the
+// start of line i+1 (0-indexed). Used for O(log n) byte-offset → line mapping.
+func buildLineOffsets(content string) []int {
+	offsets := []int{0}
+	for i := 0; i < len(content); i++ {
+		if content[i] == '\n' && i+1 < len(content) {
+			offsets = append(offsets, i+1)
+		}
+	}
+	return offsets
+}
+
+// offsetToLine does a binary search on lineOffsets to return the 1-based line
+// number for the given byte offset.
+func offsetToLine(offsets []int, byteOffset int) int {
+	lo, hi := 0, len(offsets)-1
+	for lo <= hi {
+		mid := (lo + hi) / 2
+		if offsets[mid] <= byteOffset {
+			lo = mid + 1
+		} else {
+			hi = mid - 1
+		}
+	}
+	return lo // 1-based: lo is the count of offsets <= byteOffset
+}
+
+// extractLineNumberFromEvidence parses "line N: ..." format used by
+// formatLineEvidence and returns N, or 0 if the format doesn't match.
+func extractLineNumberFromEvidence(evidence string) int {
+	if !strings.HasPrefix(evidence, "line ") {
+		return 0
+	}
+	rest := evidence[5:]
+	colonIdx := strings.Index(rest, ":")
+	if colonIdx <= 0 {
+		return 0
+	}
+	n := 0
+	for _, ch := range rest[:colonIdx] {
+		if ch < '0' || ch > '9' {
+			return 0
+		}
+		n = n*10 + int(ch-'0')
+	}
+	return n
 }

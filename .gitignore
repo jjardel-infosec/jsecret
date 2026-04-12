@@ -1,9 +1,52 @@
+# ── Go Binaries ──
 *.exe
-.gocache/
-.gotmp/
+jsecret
 jsecret.exe
 jsecret-*
-coverage
+
+# ── Build & Compilation ──
+.gocache/
+.gotmp/
+dist/
+bin/
+*.o
+*.a
+
+# ── Testing & Coverage ──
 coverage.out
-analysis_test.go
-jjsecret_test.go
+coverage/
+*.coverprofile
+*.out
+
+# ── IDE & Editor ──
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.sublime-project
+*.sublime-workspace
+
+# ── Dependencies & Vendoring ──
+vendor/
+mod/
+go.sum.bak
+go.mod.bak
+
+# ── Environment & Secrets ──
+.env
+.env.local
+.env.*.local
+
+# ── Project-specific ──
+backup*/
+*.log
+
+# ── OS-specific ──
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+._.DS_Store
