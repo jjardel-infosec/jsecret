@@ -3,8 +3,8 @@
 # Usage: ./recon-js.sh <domain>
 #
 # Outputs:
-#   Subdomains  → /home/kali/01-All-Domains/<domain>.txt
-#   JS Files    → /home/kali/03-JS-Download/<domain>/
+#   Subdomains  → $HOME/01-All-Domains/<domain>.txt
+#   JS Files    → $HOME/03-JS-Download/<domain>/
 
 set -uo pipefail
 
@@ -188,7 +188,7 @@ cat "$SUBS_RAW/"*.txt 2>/dev/null \
 TOTAL_SUBS=$(wc -l < "$SUBS_FILE")
 ok "Total unique subdomains: $TOTAL_SUBS"
 
-# ── Save subdomains to /home/kali/01-All-Domains/<domain>.txt ───────────────
+# ── Save subdomains to $ALL_DOMAINS_DIR/<domain>.txt ───────────────────────
 DEST_SUBS="$ALL_DOMAINS_DIR/$TARGET.txt"
 if [ -f "$DEST_SUBS" ]; then
     # Merge with existing history, deduplicate atomically
