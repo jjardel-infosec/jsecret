@@ -98,7 +98,7 @@ var suppressedOnVendor = map[string]bool{
 	"Session ID":                 true,
 	"CSRF Token":                 true,
 	// Frontend router definitions are not exposed server paths
-	"Admin Panel Path":   true,
+	"Admin Panel Path":    true,
 	"Internal/Debug Path": true,
 }
 
