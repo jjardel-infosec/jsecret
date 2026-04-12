@@ -1,3 +1,38 @@
+# jsecret v4.0.1 — Release Notes
+
+**Patch — False Positive Reduction for Bundled & Minified JS**  
+*Released: April 12, 2026*
+
+---
+
+## What's Fixed in v4.0.1
+
+This patch significantly reduces false positives when scanning third-party and bundled JavaScript files (Salesforce EclairNG, Aura, Sentry SDKs, React UMD bundles, etc.).
+
+### False Positives Suppressed
+
+| Pattern | Root Cause | Fix |
+|---|---|---|
+| `tr_header_brandlogoalttext` → "Trigger.dev API Key" | Old regex too broad; matched any `tr_word_word` | Regex tightened to require env prefix + 16+ alphanumeric chars; `looksLikeTranslationKey()` filter added |
+| ES5 `b.__proto__=a` → "Potential Prototype Pollution" | Old broad pattern matched dot-notation `__proto__` | `prototypePollutionPattern` narrowed to bracket-access only; new `es5InheritancePattern` excludes standard class inheritance |
+| Short minified lines (~300 chars) passed minification check | Old threshold was 600 chars | Threshold lowered to 300 chars; semicolon density secondary check added |
+| EclairNG.js, aura_prod.js, sentry-wrapper.pack.*.js not recognized as vendor | Missing markers | `vendorSubstringMarkers` extended with `eclair`, `aura_`, `sentry`, `.pack.`, `_prod.js`, `.umd.js`, `.umd.cjs`, `polyfill` |
+| Numeric-ID webpack bundles (`function(t,e,n){`) not detected as bundled | Missing pattern | `isLikelyBundledContent` now detects numeric-ID webpack modules and UMD wrappers |
+
+### New FP Regression Tests Added (14 total, all passing)
+
+`TestFP_ES5InheritanceNotPrototypePollution`, `TestFP_VendorDetection_Eclair`, `TestFP_VendorDetection_SentryPack`, `TestFP_VendorDetection_UMD`, `TestFP_MinifiedLineDetection`, `TestFP_BundledContent_NumericWebpack`, `TestFP_BookingTranslationKeysNotTriggerDev`, and more.
+
+### Upgrade from v4.0.0
+
+```bash
+go build -ldflags="-s -w" -o jsecret
+```
+
+> **Note:** v4.0.0 release binaries have these false positives. Rebuild from source or use the v4.0.1 binary.
+
+---
+
 # jsecret v4.0.0 — Release Notes
 
 **Phase 1 — Confidence Scoring, Line Tracking & Triage UX**  
