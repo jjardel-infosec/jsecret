@@ -180,6 +180,40 @@ func isUrl(rawURL string) bool {
 	return strings.HasPrefix(rawURL, "http://") || strings.HasPrefix(rawURL, "https://")
 }
 
+// normalizeURL adds https:// to entries like "example.com/file.js" that are
+// missing a scheme but clearly look like host+path URLs (not local file paths).
+// Returns the input unchanged if it already has a scheme or looks like a file path.
+func normalizeURL(raw string) string {
+	if isUrl(raw) {
+		return raw
+	}
+	// Skip blanks, comment lines, absolute/relative file paths, and Windows paths
+	if raw == "" || strings.HasPrefix(raw, "#") ||
+		strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "./") ||
+		strings.HasPrefix(raw, "../") || (len(raw) > 2 && raw[1] == ':') {
+		return raw
+	}
+	// Must contain a dot (domain) and the part before the first slash/dot
+	// must look like a hostname (no spaces, no path separator at start)
+	if strings.ContainsAny(raw, " \t") {
+		return raw
+	}
+	// Heuristic: if it contains a dot and a slash, treat as scheme-less URL
+	if strings.Contains(raw, ".") {
+		dotIdx := strings.Index(raw, ".")
+		slashOrEnd := strings.IndexByte(raw, '/')
+		if slashOrEnd == -1 {
+			slashOrEnd = len(raw)
+		}
+		// The part before the first slash must look like a hostname segment
+		host := raw[:slashOrEnd]
+		if dotIdx < slashOrEnd && !strings.Contains(host, " ") {
+			return "https://" + raw
+		}
+	}
+	return raw
+}
+
 func requester(targetURL string) (string, error) {
 	req, err := http.NewRequest("GET", targetURL, nil)
 	if err != nil {

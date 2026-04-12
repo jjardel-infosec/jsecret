@@ -351,3 +351,34 @@ func TestFP_MinifiedHeuristicsSkipped(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeURL(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		// Already has scheme — unchanged
+		{"https://booking.com/aura_prod.js", "https://booking.com/aura_prod.js"},
+		{"http://example.com/app.js", "http://example.com/app.js"},
+		// scheme-less host+path → prepend https://
+		{"booking.com/aura_prod.js", "https://booking.com/aura_prod.js"},
+		{"www.booking.com/static/js/app.js", "https://www.booking.com/static/js/app.js"},
+		{"q-cf.bstatic.com/npstatic/r/etc.js", "https://q-cf.bstatic.com/npstatic/r/etc.js"},
+		// Absolute/relative file paths — unchanged
+		{"/home/user/app.js", "/home/user/app.js"},
+		{"./app.js", "./app.js"},
+		{"../lib/app.js", "../lib/app.js"},
+		// Windows path — unchanged
+		{"C:\\Users\\test\\app.js", "C:\\Users\\test\\app.js"},
+		// Blank — unchanged
+		{"", ""},
+		// Comment line — unchanged
+		{"# this is a comment", "# this is a comment"},
+	}
+	for _, tt := range tests {
+		got := normalizeURL(tt.input)
+		if got != tt.want {
+			t.Errorf("normalizeURL(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}

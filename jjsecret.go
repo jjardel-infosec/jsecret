@@ -798,7 +798,7 @@ func main() {
 
 			scanner := bufio.NewScanner(file)
 			for scanner.Scan() {
-				line := scanner.Text()
+				line := normalizeURL(scanner.Text())
 				if line != "" {
 					jobs <- line
 				}
@@ -809,7 +809,7 @@ func main() {
 		// 4. Stdin Mode
 		scanner := bufio.NewScanner(os.Stdin)
 		for scanner.Scan() {
-			line := scanner.Text()
+			line := normalizeURL(scanner.Text())
 			if line != "" {
 				jobs <- line
 			}
@@ -961,7 +961,7 @@ func writeSARIFOutput(path string, results []Result) {
 				Tool: SARIFTool{
 					Driver: SARIFDriver{
 						Name:           "jsecret",
-						Version:        "4.0.2",
+						Version:        "4.0.3",
 						InformationURI: "https://github.com/jjardel-infosec/jsecret",
 						Rules:          rules,
 					},
@@ -1059,6 +1059,6 @@ func printBanner() {
       | \__ \  __/ (__| | |  __/| |_ 
       | |___/\___|\___|_|  \___| \__|
      _/ |                            
-    |__/   v4.0.2 - @jjardel-infosec (Ultimate JS Security Scanner)
+    |__/   v4.0.3 - @jjardel-infosec (Ultimate JS Security Scanner)
 	`)
 }
