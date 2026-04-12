@@ -144,6 +144,30 @@ func TestFP_TranslationKeysNotTriggerDev(t *testing.T) {
 	}
 }
 
+func TestFP_BookingTranslationKeysNotTriggerDev(t *testing.T) {
+	content := `var translations = {
+		tr_header_brandlogoalttext: "Brand logo",
+		tr_header_brandlogoalttext_autohuren: "Brand logo autohuren",
+		tr_header_brandlogoalttext_bravofly: "Brand logo bravofly",
+		tr_header_brandlogoalttext_: "Brand logo default",
+		tr_common_text_copyright: "Copyright",
+		tr_common_text_copyright_ryanair: "Copyright Ryanair",
+		tr_common_text_copyright_: "Copyright default",
+		tr_currency_topcurrencies: "Top currencies",
+		tr_currency_allcurrencies: "All currencies",
+		tr_header_languagecurrencypanel_selectcurrency: "Select currency",
+		tr_helpcentre_page_title: "Help centre",
+		tr_footer_privacypolicy: "Privacy policy",
+		tr_footer_termsconditions: "Terms and conditions"
+	};`
+	results := scanContent("booking.com/client.374869a4afb9a509b2fe.js", content)
+	for _, r := range results {
+		if r.Name == "Trigger.dev API Key" {
+			t.Errorf("booking.com translation key falsely detected as Trigger.dev API Key: %s", r.Match)
+		}
+	}
+}
+
 func TestFP_BearerTokenLiteral(t *testing.T) {
 	// The literal string "Bearer Token" in UI/docs should NOT match
 	content := `const authType = "Bearer Token";`
