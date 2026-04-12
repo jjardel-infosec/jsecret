@@ -1,5 +1,7 @@
 # jsecret
 
+> Also available in: [Português (pt-BR)](README.pt-br.md)
+
 `jsecret` is a zero-dependency static scanner for JavaScript and TypeScript assets. It is built to find exposed secrets, risky client-side patterns, and bug bounty-relevant findings in source code, compiled bundles, remote scripts, and exposed source maps.
 
 It combines a broad provider-aware signature catalog with a growing set of context-aware heuristics, then spends real effort suppressing the false positives that normally make scanners noisy in real projects.
@@ -393,6 +395,31 @@ Direct Go commands:
 go test ./...
 go test -run=^$ -bench=. -benchmem ./...
 ```
+
+## Ethical and Responsible Use
+
+`jsecret` and `recon-js.sh` were developed exclusively to support legitimate information security activities, including authorized penetration tests, bug bounty programs, technical audits, and academic research.
+
+Use must strictly follow these principles:
+
+**Prior authorization**
+The tools must only be used against assets, systems, or environments for which formal, documented authorization exists.
+
+**Legal and regulatory compliance**
+The user is fully responsible for ensuring that use complies with all applicable laws, including data protection and cybercrime legislation.
+
+**Respect for confidentiality and integrity**
+Accessing, collecting, storing, or disclosing sensitive data without a justified technical need and explicit authorization is prohibited.
+
+**Proportional and responsible use**
+Vulnerability exploitation must be limited to what is necessary for technical validation, avoiding service disruption, operational impact, or any form of damage.
+
+**Accountability**
+Misuse of these tools may result in civil, administrative, and criminal sanctions, and is the sole responsibility of the user.
+
+The purpose of these tools is to contribute to stronger system security and user privacy, promoting ethical and responsible practices in the offensive security ecosystem.
+
+---
 
 ## License
 
