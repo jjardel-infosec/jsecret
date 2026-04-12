@@ -336,6 +336,84 @@ func TestFP_BundledContent_NumericWebpack(t *testing.T) {
 	}
 }
 
+func TestFP_PasswordMessagesNotHardcodedCredentials(t *testing.T) {
+	content := `var jsStr = {
+		ssopasswordisinvalid: 'Password is invalid. Please enter the password you just reset.',
+		tcpasswordrequired: 'Password is required.',
+		tcpasswordtooweak: 'Password is too weak.'
+	};`
+	results := scanContent("strings_en_US.js", content)
+	for _, r := range results {
+		if r.Name == "Potential Hardcoded Credential" || r.Name == "Password Assignment" {
+			t.Fatalf("password validation string should not be flagged: %s - %s", r.Name, r.Match)
+		}
+	}
+}
+
+func TestFP_PasswordSelectorNotAssignment(t *testing.T) {
+	content := `var field = { password: "[type=password]" };`
+	results := scanContent("store-locator.js", content)
+	for _, r := range results {
+		if r.Name == "Password Assignment" || r.Name == "Potential Hardcoded Credential" {
+			t.Fatalf("CSS selector should not be flagged as password secret: %s - %s", r.Name, r.Match)
+		}
+	}
+}
+
+func TestFP_PasswordEnumNotAssignment(t *testing.T) {
+	content := `var labels = { Password: "eOTT_OneTimePassword" };`
+	results := scanContent("login.js", content)
+	for _, r := range results {
+		if r.Name == "Password Assignment" || r.Name == "Potential Hardcoded Credential" {
+			t.Fatalf("enum-like password label should not be flagged: %s - %s", r.Name, r.Match)
+		}
+	}
+}
+
+func TestHeuristic_OpenRedirectRequiresTaintedSource(t *testing.T) {
+	content := `_iframe.contentWindow.location.href = _iframe.src;`
+	results := scanContent("gtm.js", content)
+	for _, r := range results {
+		if r.Name == "Potential Open Redirect" {
+			t.Fatalf("non-tainted iframe redirect should not be flagged: %s", r.Match)
+		}
+	}
+}
+
+func TestHeuristic_InsecureCookieIgnoresReads(t *testing.T) {
+	content := `var cookie = document.cookie.split("; ").find((cookie) => cookie.split("=")[0] === name);`
+	results := scanContent("panorama-nav-init.js", content)
+	for _, r := range results {
+		if r.Name == "Insecure Cookie (Missing Secure/HttpOnly)" {
+			t.Fatalf("cookie reads should not be flagged as insecure cookie writes: %s", r.Match)
+		}
+	}
+}
+
+func TestFP_HERECSSModuleNotAPIKey(t *testing.T) {
+	content := `var styles = { "here-modal": "LoyaltyAlmostThereModal-module-scss-module__uzeUFW__almost-there-modal" };`
+	results := scanContent("chunk.js", content)
+	for _, r := range results {
+		if r.Name == "HERE Maps API Key" {
+			t.Fatalf("CSS module class should not be flagged as HERE Maps API Key: %s", r.Match)
+		}
+	}
+}
+
+func TestDetect_RealPasswordAssignmentStillFlags(t *testing.T) {
+	content := `const config = { password: "SuperSecret123!" };`
+	results := scanContent("config.js", content)
+	found := false
+	for _, r := range results {
+		if r.Name == "Password Assignment" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected real password assignment to still be detected")
+	}
+}
+
 func TestFP_MinifiedHeuristicsSkipped(t *testing.T) {
 	// ES5 minified line with prototype inheritance should produce no findings
 	line := "a&&(b.__proto__=a);b.prototype=Object.create(a&&a.prototype);b.prototype.constructor=b;"

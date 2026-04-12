@@ -202,7 +202,7 @@ func init() {
 		// ═══════════════════════════════════════════════════════════════════
 		// 🗺️ Maps / Geolocation / CDN
 		// ═══════════════════════════════════════════════════════════════════
-		{"HERE Maps API Key", `(?i)(?:here|HERE_API_KEY)\b[^\n]{0,40}[:=]\s*['"][a-zA-Z0-9_-]{40,}['"]`, "MEDIUM", ""},
+		{"HERE Maps API Key", `(?is)(?:\bHERE_API_KEY\b|\bhere(?:Api)?Key\b|H\.service\.Platform\s*\(\s*\{[^}\n]{0,120}\bapi[_-]?key\b)\s*[:=]\s*['"][a-zA-Z0-9_-]{40,}['"]`, "MEDIUM", ""},
 		{"Fastly API Token", `(?i)(?:fastly|FASTLY_API_TOKEN)\b[^\n]{0,40}[:=]\s*['"][a-zA-Z0-9_-]{32,}['"]`, "HIGH", "fastly"},
 		{"Cloudflare Workers KV Token", `(?i)(?:CF_KV|cloudflare[_\-\s.]*kv)[_\-\s.]*(?:token|key)['": \t=]+[a-zA-Z0-9_-]{40,}`, "HIGH", ""},
 

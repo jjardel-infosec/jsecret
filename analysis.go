@@ -371,7 +371,7 @@ var (
 	redosQuantifiedOverlap      = regexp.MustCompile(`[.\\][*+].*[.\\][*+].*[.\\][*+]`)                                                     // .*.*.*  triple greedy
 	redosNestedRepetition       = regexp.MustCompile(`\([^)]*\{\d+,?\d*\}[^)]*\)[+*{]`)                                                     // (a{1,})+
 	redosStarStar               = regexp.MustCompile(`(?:\.[*+]|\[[^\]]+\][*+]|\\[wdsSbB][*+])\s*(?:\.[*+]|\[[^\]]+\][*+]|\\[wdsSbB][*+])`) // .*.+ patterns
-	insecureCookiePattern       = regexp.MustCompile(`(?i)(?:set-cookie|res\.cookie|response\.cookie|cookie\s*[:=])`)
+	insecureCookiePattern       = regexp.MustCompile(`(?i)(?:set-cookie|res\.cookie|response\.cookie)`)
 	secureCookieFlagPattern     = regexp.MustCompile(`(?i)(?:secure\s*:\s*true|httpOnly\s*:\s*true|__Host-|__Secure-)`)
 	debugModePattern            = regexp.MustCompile(`(?i)(?:debug\s*[:=]\s*true|NODE_ENV\s*[:=!]=?\s*['"]development['"]|app\.debug\s*=\s*True|DEBUG\s*=\s*['"]?(?:True|1|yes)['"]?)`)
 	graphqlIntrospectionPattern = regexp.MustCompile(`(?i)(?:introspection\s*:\s*true|__schema\s*{)`)
@@ -659,7 +659,7 @@ func collectSignatureFindings(target, content string, addLine func(name, priorit
 
 			// For Password Assignment, filter out common non-secret values
 			if sig.Name == "Password Assignment" {
-				if passwordNonSecretValues[strings.ToLower(value)] {
+				if passwordNonSecretValues[strings.ToLower(value)] || isLikelyNonSecretPasswordValue(value) {
 					continue
 				}
 			}
@@ -776,7 +776,7 @@ func collectHeuristicFindings(target, content string, add func(name, priority, m
 		}
 
 		if strings.Contains(text, "redirect") || strings.Contains(text, "location") {
-			if redirectPattern.MatchString(text) && taintSourcePattern.MatchString(text) {
+			if shouldFlagOpenRedirect(text) {
 				add("Potential Open Redirect", "MEDIUM", formatLineEvidence(line.Number, text))
 			}
 		}
@@ -830,7 +830,7 @@ func collectHeuristicFindings(target, content string, add func(name, priority, m
 		}
 
 		if strings.Contains(text, "cookie") || strings.Contains(text, "Cookie") {
-			if insecureCookiePattern.MatchString(text) && !secureCookieFlagPattern.MatchString(text) {
+			if shouldFlagInsecureCookie(text) {
 				add("Insecure Cookie (Missing Secure/HttpOnly)", "MEDIUM", formatLineEvidence(line.Number, text))
 			}
 		}
@@ -1045,6 +1045,31 @@ func shouldFlagHeaderInjection(line string) bool {
 	return headerTaintPattern.MatchString(line)
 }
 
+func shouldFlagOpenRedirect(line string) bool {
+	if !redirectPattern.MatchString(line) {
+		return false
+	}
+
+	lower := strings.ToLower(line)
+	if strings.Contains(lower, "res.redirect") {
+		return taintSourcePattern.MatchString(argumentInsideCall(line))
+	}
+
+	if strings.Contains(lower, "location") {
+		return taintSourcePattern.MatchString(textAfterFirstEquals(line))
+	}
+
+	return false
+}
+
+func shouldFlagInsecureCookie(line string) bool {
+	if secureCookieFlagPattern.MatchString(line) {
+		return false
+	}
+
+	return insecureCookiePattern.MatchString(line)
+}
+
 func shouldFlagSourceMapReference(line string) bool {
 	return exposedSourceMapPattern.MatchString(line)
 }
@@ -1195,7 +1220,10 @@ func looksCredentialLike(identifier, value string) bool {
 		return false // CSS class names like ".btn-primary-outlined"
 	}
 
-	if strings.Contains(identifier, "password") || strings.Contains(identifier, "passwd") {
+	if strings.Contains(identifier, "password") || strings.Contains(identifier, "passwd") || strings.Contains(identifier, "pwd") {
+		if isLikelyNonSecretPasswordValue(value) {
+			return false
+		}
 		return len(value) >= 6
 	}
 
@@ -1216,6 +1244,79 @@ func looksCredentialLike(identifier, value string) bool {
 		return true
 	}
 
+	return false
+}
+
+func isLikelyNonSecretPasswordValue(value string) bool {
+	trimmed := trimLiteralValue(value)
+	lower := strings.ToLower(trimmed)
+	if trimmed == "" {
+		return false
+	}
+
+	if passwordNonSecretValues[lower] {
+		return true
+	}
+
+	if strings.ContainsAny(trimmed, " \t\r\n") {
+		return true
+	}
+
+	if strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, ".") || strings.HasPrefix(trimmed, "#") {
+		return true
+	}
+
+	if strings.Contains(lower, "type=password") {
+		return true
+	}
+
+	if looksLikeIdentifierLiteral(trimmed) && !containsDigit(trimmed) {
+		if strings.Contains(trimmed, "_") || hasMixedCase(trimmed) || strings.Contains(lower, "password") {
+			return true
+		}
+	}
+
+	return false
+}
+
+func looksLikeIdentifierLiteral(value string) bool {
+	for i, r := range value {
+		isLetter := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
+		isDigit := r >= '0' && r <= '9'
+		if i == 0 {
+			if !isLetter && r != '_' {
+				return false
+			}
+			continue
+		}
+		if !isLetter && !isDigit && r != '_' {
+			return false
+		}
+	}
+
+	return len(value) >= 8
+}
+
+func hasMixedCase(value string) bool {
+	hasLower := false
+	hasUpper := false
+	for _, r := range value {
+		if r >= 'a' && r <= 'z' {
+			hasLower = true
+		}
+		if r >= 'A' && r <= 'Z' {
+			hasUpper = true
+		}
+	}
+	return hasLower && hasUpper
+}
+
+func containsDigit(value string) bool {
+	for _, r := range value {
+		if r >= '0' && r <= '9' {
+			return true
+		}
+	}
 	return false
 }
 
