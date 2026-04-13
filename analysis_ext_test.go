@@ -320,6 +320,36 @@ func TestFP_ThirdPartyPdfJsHeuristicsSuppressed(t *testing.T) {
 	}
 }
 
+func TestFP_ThirdPartyAngularFilepickerHeuristicsSuppressed(t *testing.T) {
+	content := `mimetypes: attrs.mimetypes ? eval(attrs.mimetypes) : ['*'],`
+	results := scanContent("https://eventos.uniube.br/Scripts/angular-filepicker.js?v=1", content)
+	for _, r := range results {
+		if r.Name == "Dynamic Code Execution Sink" {
+			t.Fatalf("third-party angular-filepicker should suppress heuristic finding %s: %s", r.Name, r.Match)
+		}
+	}
+}
+
+func TestFP_VendorCredentialsInURLSuppressed(t *testing.T) {
+	content := `http://user:password@example.com:8080/#/some/path?foo=bar&baz=xoxo`
+	results := scanContent("https://eventos.uniube.br/Scripts/angular.js", content)
+	for _, r := range results {
+		if r.Name == "Credentials in URL" {
+			t.Fatalf("vendor documentation example should not be flagged as credentials in URL: %s", r.Match)
+		}
+	}
+}
+
+func TestFP_VendorInternalEmailSuppressed(t *testing.T) {
+	content := `v.demidov@corp.mail`
+	results := scanContent("https://laudosmphu.uniube.br/portal-laudos/bower_components/ng-file-upload/FileAPI.js", content)
+	for _, r := range results {
+		if r.Name == "Internal Email Address" {
+			t.Fatalf("vendor metadata should not be flagged as internal email address: %s", r.Match)
+		}
+	}
+}
+
 func TestFP_BundledContent_VarClientPrefix(t *testing.T) {
 	// Webpack bundle that prepends `var client;` before the IIFE arrow function
 	bundle := "var client;(()=>{var e={136:(e,t,r)=>{\"use strict\";t.FK=void 0;"
@@ -452,6 +482,26 @@ func TestHeuristic_HTMLSinkStillFlagsTaintedI18NextLookup(t *testing.T) {
 	t.Fatal("expected tainted i18next lookup to still be flagged")
 }
 
+func TestHeuristic_HTMLSinkIgnoresStaticAssignmentBeforeCommaOperator(t *testing.T) {
+	content := `this.popup.outerHTML = '', 200;`
+	results := scanContent("Popup.js", content)
+	for _, r := range results {
+		if r.Name == "HTML Injection Sink" || r.Name == "Potential DOM XSS" {
+			t.Fatalf("static outerHTML assignment should not be flagged before a comma operator: %s", r.Match)
+		}
+	}
+}
+
+func TestFP_FrameworkDollarEvalNotDynamicCodeExecution(t *testing.T) {
+	content := `return scope.$eval(attrs.btnLoading);`
+	results := scanContent("directive.js", content)
+	for _, r := range results {
+		if r.Name == "Dynamic Code Execution Sink" {
+			t.Fatalf("framework $eval helper should not be flagged as Dynamic Code Execution Sink: %s", r.Match)
+		}
+	}
+}
+
 func TestHeuristic_WebStorageIgnoresNonSensitiveKey(t *testing.T) {
 	content := `window.sessionStorage.setItem('ddOriginalReferrer', ddOriginalReferrer);`
 	results := scanContent("referrer.js", content)
@@ -491,6 +541,18 @@ func TestFP_HERECSSModuleNotAPIKey(t *testing.T) {
 		if r.Name == "HERE Maps API Key" {
 			t.Fatalf("CSS module class should not be flagged as HERE Maps API Key: %s", r.Match)
 		}
+	}
+}
+
+func TestFP_VendorDetection_BowerComponentsPath(t *testing.T) {
+	if !isLikelyVendorTarget("https://laudosmphu.uniube.br/portal-laudos/bower_components/angular-ui-event/dist/event.js") {
+		t.Error("bower_components path should be detected as vendor target")
+	}
+}
+
+func TestFP_VendorDetection_AngularLibraryBasename(t *testing.T) {
+	if !isLikelyVendorTarget("https://eventos.uniube.br/Scripts/angular-select.js?v=1") {
+		t.Error("angular-select.js should be detected as vendor target")
 	}
 }
 

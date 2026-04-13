@@ -86,6 +86,8 @@ var suppressedOnVendor = map[string]bool{
 	"Localhost Reference":        true,
 	"Private IP (Internal)":      true,
 	"Dev/Stage URL":              true,
+	"Credentials in URL":         true,
+	"Internal Email Address":     true,
 	"Basic Auth String":          true,
 	"OAuth Client Secret":        true,
 	"OAuth Client ID":            true,
@@ -730,7 +732,7 @@ func collectHeuristicFindings(target, content string, add func(name, priority, m
 		}
 
 		if strings.Contains(text, "eval") || strings.Contains(text, "Function(") || strings.Contains(text, "setTimeout") || strings.Contains(text, "setInterval") {
-			if dynamicCodePattern.MatchString(text) {
+			if dynamicCodePattern.MatchString(text) && !isFrameworkEvalUsage(text) {
 				add("Dynamic Code Execution Sink", "HIGH", formatLineEvidence(line.Number, text))
 			}
 		}
@@ -1009,7 +1011,7 @@ func shouldFlagHTMLSink(line string) bool {
 	case strings.Contains(line, "document.write"):
 		return hasDynamicFragment(argumentInsideCall(line))
 	case strings.Contains(line, ".innerHTML") || strings.Contains(line, ".outerHTML") || strings.Contains(line, ".srcdoc"):
-		fragment := textAfterFirstEquals(line)
+		fragment := assignedValueFragment(line)
 		if isStaticI18nHTMLSource(fragment) {
 			return false
 		}
@@ -1030,6 +1032,10 @@ func isStaticI18nHTMLSource(fragment string) bool {
 	}
 
 	return i18nHTMLSourcePattern.MatchString(fragment)
+}
+
+func isFrameworkEvalUsage(line string) bool {
+	return strings.Contains(line, ".$eval(")
 }
 
 func shouldFlagWebhookHandler(line string) bool {
@@ -1137,6 +1143,97 @@ func textAfterFirstEquals(line string) string {
 		return ""
 	}
 	return line[idx+1:]
+}
+
+func assignedValueFragment(line string) string {
+	fragment := textAfterFirstEquals(line)
+	if fragment == "" {
+		return ""
+	}
+
+	var out strings.Builder
+	inSingle := false
+	inDouble := false
+	inTemplate := false
+	escapeNext := false
+	parenDepth := 0
+	bracketDepth := 0
+	braceDepth := 0
+
+	for i := 0; i < len(fragment); i++ {
+		ch := fragment[i]
+
+		if escapeNext {
+			out.WriteByte(ch)
+			escapeNext = false
+			continue
+		}
+
+		if inSingle {
+			if ch == '\\' {
+				escapeNext = true
+			} else if ch == '\'' {
+				inSingle = false
+			}
+			out.WriteByte(ch)
+			continue
+		}
+
+		if inDouble {
+			if ch == '\\' {
+				escapeNext = true
+			} else if ch == '"' {
+				inDouble = false
+			}
+			out.WriteByte(ch)
+			continue
+		}
+
+		if inTemplate {
+			if ch == '\\' {
+				escapeNext = true
+			} else if ch == '`' {
+				inTemplate = false
+			}
+			out.WriteByte(ch)
+			continue
+		}
+
+		switch ch {
+		case '\'':
+			inSingle = true
+		case '"':
+			inDouble = true
+		case '`':
+			inTemplate = true
+		case '(':
+			parenDepth++
+		case ')':
+			if parenDepth > 0 {
+				parenDepth--
+			}
+		case '[':
+			bracketDepth++
+		case ']':
+			if bracketDepth > 0 {
+				bracketDepth--
+			}
+		case '{':
+			braceDepth++
+		case '}':
+			if braceDepth > 0 {
+				braceDepth--
+			}
+		case ',', ';':
+			if parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 {
+				return strings.TrimSpace(out.String())
+			}
+		}
+
+		out.WriteByte(ch)
+	}
+
+	return strings.TrimSpace(out.String())
 }
 
 func argumentInsideCall(line string) string {
@@ -1598,6 +1695,20 @@ var vendorExactBasenames = map[string]bool{
 	"app.js": true, "all.js": true, "js.js": true,
 	"fontawesome.js": true, "player.js": true,
 	"runtime.js": true, "polyfills.js": true,
+	"angular.js": true, "angular-route.js": true,
+	"angular-resource.js": true, "angular-sanitize.js": true,
+	"angular-strap.js": true, "angular-select.js": true,
+	"angular-ui-ace.js": true, "angular-ui-utils.js": true,
+	"angular-button-loading.js": true, "angular-filepicker.js": true,
+	"angular-tinymce.js": true, "angular-scroll.js": true,
+	"angular-qrcode.js": true, "angular-validation.js": true,
+	"angular-validation-rule-1.0.0.js": true,
+	"ng-file-upload.js":                true, "smart-table.js": true,
+	"lrinfinitescroll.js": true, "quill.js": true,
+	"summernote.js": true, "respond.js": true,
+	"typeahead.js": true, "iosoverlay.js": true,
+	"notificationfx.js": true, "chardinjs.js": true,
+	"popper.js": true, "fileapi.js": true,
 }
 
 // vendorSubstringMarkers are substrings checked anywhere in the path
@@ -1611,12 +1722,18 @@ var vendorSubstringMarkers = []string{
 	"pdf.js", "pdf.worker", "pdf_viewer",
 	"migrate", "bxslider", "i18next", "richfaces",
 	"chart", "vendor", "bundle", "chunk", "node_modules",
+	"bower_components",
 	"eclair", "aura_", "sentry", "polyfill",
 }
 
 func isLikelyVendorTarget(target string) bool {
-	lower := strings.ToLower(target)
-	base := strings.ToLower(filepath.Base(target))
+	cleanTarget := target
+	if idx := strings.IndexAny(cleanTarget, "?#"); idx >= 0 {
+		cleanTarget = cleanTarget[:idx]
+	}
+
+	lower := strings.ToLower(cleanTarget)
+	base := strings.ToLower(filepath.Base(cleanTarget))
 
 	// Fast exact-match on basename
 	if vendorExactBasenames[base] {
@@ -1625,8 +1742,8 @@ func isLikelyVendorTarget(target string) bool {
 
 	// Cross-platform base
 	unixBase := base
-	if strings.ContainsRune(target, '\\') {
-		unixBase = strings.ToLower(path.Base(strings.ReplaceAll(target, "\\", "/")))
+	if strings.ContainsRune(cleanTarget, '\\') {
+		unixBase = strings.ToLower(path.Base(strings.ReplaceAll(cleanTarget, "\\", "/")))
 	}
 	if unixBase != base && vendorExactBasenames[unixBase] {
 		return true
