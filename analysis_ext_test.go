@@ -421,6 +421,37 @@ func TestHeuristic_InsecureCookieIgnoresReads(t *testing.T) {
 	}
 }
 
+func TestHeuristic_HTMLSinkIgnoresStaticI18NextLookup(t *testing.T) {
+	content := `document.getElementById("navbarBtn1").innerHTML = i18next.t("navbarBtn1");`
+	results := scanContent("i18n_index.js", content)
+	for _, r := range results {
+		if r.Name == "HTML Injection Sink" || r.Name == "Potential DOM XSS" {
+			t.Fatalf("static i18next lookup should not be flagged as HTML sink: %s", r.Match)
+		}
+	}
+}
+
+func TestHeuristic_HTMLSinkIgnoresStaticResourceTranslationLookup(t *testing.T) {
+	content := `videoHomeElement.innerHTML = resources.pt.translation.videoHome;`
+	results := scanContent("i18n_index.js", content)
+	for _, r := range results {
+		if r.Name == "HTML Injection Sink" || r.Name == "Potential DOM XSS" {
+			t.Fatalf("static resource translation lookup should not be flagged as HTML sink: %s", r.Match)
+		}
+	}
+}
+
+func TestHeuristic_HTMLSinkStillFlagsTaintedI18NextLookup(t *testing.T) {
+	content := `element.innerHTML = i18next.t(window.location.hash);`
+	results := scanContent("i18n_index.js", content)
+	for _, r := range results {
+		if r.Name == "HTML Injection Sink" || r.Name == "Potential DOM XSS" {
+			return
+		}
+	}
+	t.Fatal("expected tainted i18next lookup to still be flagged")
+}
+
 func TestHeuristic_WebStorageIgnoresNonSensitiveKey(t *testing.T) {
 	content := `window.sessionStorage.setItem('ddOriginalReferrer', ddOriginalReferrer);`
 	results := scanContent("referrer.js", content)

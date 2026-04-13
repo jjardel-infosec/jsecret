@@ -340,6 +340,7 @@ var (
 	mathRandomPattern           = regexp.MustCompile(`(?i)Math\.random\s*\(`)
 	sensitiveNamePattern        = regexp.MustCompile(`(?i)(?:token|secret|session|nonce|csrf|otp|auth|password|reset|invite|api[_-]?key|code_verifier|state)`)
 	sanitizerPattern            = regexp.MustCompile(`(?i)(?:DOMPurify\.sanitize|sanitizeHtml|xssFilters|escapeHtml|he\.encode)`)
+	i18nHTMLSourcePattern       = regexp.MustCompile(`(?i)^(?:i18next\.t\(\s*['"][^'"\n]+['"]\s*\)|resources\.[a-z0-9_-]+\.translation(?:\.[A-Za-z0-9_$]+)+)$`)
 	corsWildcardPattern         = regexp.MustCompile(`(?is)cors\s*\(\s*{[^}]*origin\s*:\s*['"]\*['"][^}]*credentials\s*:\s*true`)
 	manualCorsPattern           = regexp.MustCompile(`(?is)Access-Control-Allow-Origin['"]?\s*[:=,]\s*['"]\*['"][\s\S]{0,200}Access-Control-Allow-Credentials['"]?\s*[:=,]\s*true`)
 	// Security heuristics
@@ -1008,10 +1009,27 @@ func shouldFlagHTMLSink(line string) bool {
 	case strings.Contains(line, "document.write"):
 		return hasDynamicFragment(argumentInsideCall(line))
 	case strings.Contains(line, ".innerHTML") || strings.Contains(line, ".outerHTML") || strings.Contains(line, ".srcdoc"):
-		return hasDynamicFragment(textAfterFirstEquals(line))
+		fragment := textAfterFirstEquals(line)
+		if isStaticI18nHTMLSource(fragment) {
+			return false
+		}
+		return hasDynamicFragment(fragment)
 	default:
 		return false
 	}
+}
+
+func isStaticI18nHTMLSource(fragment string) bool {
+	fragment = strings.TrimSpace(strings.TrimSuffix(fragment, ";"))
+	if fragment == "" {
+		return false
+	}
+
+	if strings.Contains(fragment, "${") || strings.Contains(fragment, "+") {
+		return false
+	}
+
+	return i18nHTMLSourcePattern.MatchString(fragment)
 }
 
 func shouldFlagWebhookHandler(line string) bool {
