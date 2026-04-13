@@ -331,6 +331,7 @@ var (
 	weakCryptoPattern           = regexp.MustCompile(`(?i)(?:createHash\s*\(\s*['"](?:md5|sha1)['"]|CryptoJS\.(?:MD5|SHA1)\s*\(|\bmd5\s*\(|\bsha1\s*\(|createCipher\s*\(|createDecipher\s*\(|\bDES\b|\bRC4\b|\bECB\b)`)
 	insecureTLSPattern          = regexp.MustCompile(`(?i)(?:rejectUnauthorized\s*:\s*false|strictSSL\s*:\s*false|process\.env\.NODE_TLS_REJECT_UNAUTHORIZED\s*=\s*['"]?0['"]?|NODE_TLS_REJECT_UNAUTHORIZED\s*=\s*['"]?0['"]?)`)
 	insecureStoragePattern      = regexp.MustCompile(`(?i)(?:localStorage|sessionStorage)\.setItem\s*\(`)
+	storageSetItemPattern       = regexp.MustCompile(`(?i)(?:localStorage|sessionStorage)\.setItem\s*\(\s*([^,\)\n]+)`)
 	documentCookiePattern       = regexp.MustCompile(`(?i)document\.cookie\s*=`)
 	postMessageWildcardPattern  = regexp.MustCompile(`(?i)\bpostMessage\s*\([^,]+,\s*['"]\*['"]\s*\)`)
 	requestPattern              = regexp.MustCompile(`(?i)(?:fetch|axios(?:\.(?:get|post|put|patch|delete|request))?|got(?:\.(?:get|post|put|delete))?|request|https?\.get)\s*\(`)
@@ -758,8 +759,10 @@ func collectHeuristicFindings(target, content string, add func(name, priority, m
 		}
 
 		if strings.Contains(text, "Storage") || strings.Contains(text, "localStorage") || strings.Contains(text, "sessionStorage") {
-			if insecureStoragePattern.MatchString(text) && sensitiveNamePattern.MatchString(text) {
-				add("Sensitive Data Stored In Web Storage", "MEDIUM", formatLineEvidence(line.Number, text))
+			if insecureStoragePattern.MatchString(text) {
+				if storageKey := storageSetItemKey(text); storageKey != "" && sensitiveNamePattern.MatchString(storageKey) {
+					add("Sensitive Data Stored In Web Storage", "MEDIUM", formatLineEvidence(line.Number, text))
+				}
 			}
 		}
 
@@ -1133,6 +1136,15 @@ func argumentAfterNthComma(line string, commaIndex int) string {
 		return ""
 	}
 	return args[commaIndex]
+}
+
+func storageSetItemKey(line string) string {
+	matches := storageSetItemPattern.FindStringSubmatch(line)
+	if len(matches) < 2 {
+		return ""
+	}
+
+	return trimLiteralValue(matches[1])
 }
 
 func splitArguments(input string) []string {
@@ -1576,6 +1588,9 @@ var vendorSubstringMarkers = []string{
 	".umd.js", ".umd.cjs", ".pack.", "_prod.js", "_prod_",
 	"jquery", "bootstrap", "react", "vue", "redux",
 	"moment", "modernizr", "datatables", "fitvids",
+	"cdnjs", "squarespace", "scripts-compressed",
+	"okta-sign-in", "appsflyer",
+	"pdf.js", "pdf.worker", "pdf_viewer",
 	"migrate", "bxslider", "i18next", "richfaces",
 	"chart", "vendor", "bundle", "chunk", "node_modules",
 	"eclair", "aura_", "sentry", "polyfill",

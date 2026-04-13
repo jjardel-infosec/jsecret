@@ -179,6 +179,27 @@ func TestFP_BearerTokenLiteral(t *testing.T) {
 	}
 }
 
+func TestDetect_AuthorizationBearerHeader(t *testing.T) {
+	content := `const headers = { Authorization: "Bearer aB3dE5gH7jK9mN2pQ4rS6tU8vW0xY1z" };`
+	results := scanContent("auth.js", content)
+	for _, r := range results {
+		if r.Name == "Authorization Bearer Token" {
+			return
+		}
+	}
+	t.Fatal("expected Authorization Bearer Token to be detected in an Authorization header")
+}
+
+func TestFP_GraphiQLNotDetectedAsSwaggerOpenAPI(t *testing.T) {
+	content := `const route = "graphiql";`
+	results := scanContent("docs.js", content)
+	for _, r := range results {
+		if r.Name == "Exposed Swagger/OpenAPI" {
+			t.Fatalf("graphiql string falsely detected as Swagger/OpenAPI exposure: %s", r.Match)
+		}
+	}
+}
+
 func TestFP_CredentialsInURL_TemplateURL(t *testing.T) {
 	// Template URL with authuser param + unrelated @ in code should NOT match
 	content := "var providers=[{url:`https://mail.google.com/mail?authuser=${e}`,gmail:!0},{regex:/@yahoo\\.com$/,url:\"https://mail.yahoo.com\"}];"
@@ -289,6 +310,16 @@ func TestFP_VendorDetection_HashedNames(t *testing.T) {
 	}
 }
 
+func TestFP_ThirdPartyPdfJsHeuristicsSuppressed(t *testing.T) {
+	content := `new Function(''); global.postMessage(id + '', '*');`
+	results := scanContent("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.2.2/pdf.js", content)
+	for _, r := range results {
+		if r.Name == "Dynamic Code Execution Sink" || r.Name == "Wildcard postMessage Target Origin" {
+			t.Fatalf("third-party pdf.js bundle should suppress heuristic finding %s: %s", r.Name, r.Match)
+		}
+	}
+}
+
 func TestFP_BundledContent_VarClientPrefix(t *testing.T) {
 	// Webpack bundle that prepends `var client;` before the IIFE arrow function
 	bundle := "var client;(()=>{var e={136:(e,t,r)=>{\"use strict\";t.FK=void 0;"
@@ -388,6 +419,38 @@ func TestHeuristic_InsecureCookieIgnoresReads(t *testing.T) {
 			t.Fatalf("cookie reads should not be flagged as insecure cookie writes: %s", r.Match)
 		}
 	}
+}
+
+func TestHeuristic_WebStorageIgnoresNonSensitiveKey(t *testing.T) {
+	content := `window.sessionStorage.setItem('ddOriginalReferrer', ddOriginalReferrer);`
+	results := scanContent("referrer.js", content)
+	for _, r := range results {
+		if r.Name == "Sensitive Data Stored In Web Storage" {
+			t.Fatalf("non-sensitive storage key should not be flagged: %s", r.Match)
+		}
+	}
+}
+
+func TestHeuristic_WebStorageFlagsSensitiveKey(t *testing.T) {
+	content := `window.sessionStorage.setItem('sessionToken', token);`
+	results := scanContent("auth.js", content)
+	for _, r := range results {
+		if r.Name == "Sensitive Data Stored In Web Storage" {
+			return
+		}
+	}
+	t.Fatal("expected sensitive storage key to still be flagged")
+}
+
+func TestHeuristic_WebStorageFlagsSensitiveKeyWithLeadingParen(t *testing.T) {
+	content := `if (enabled) window.sessionStorage.setItem('sessionToken', token);`
+	results := scanContent("auth.js", content)
+	for _, r := range results {
+		if r.Name == "Sensitive Data Stored In Web Storage" {
+			return
+		}
+	}
+	t.Fatal("expected sensitive storage key to still be flagged with leading parentheses")
 }
 
 func TestFP_HERECSSModuleNotAPIKey(t *testing.T) {
